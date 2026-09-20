@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "HUMAN Notifications",
+  "short_name": "HUMAN Notify",
+  "version": "0.9",
+  "description": "Неофіційні сповіщення, домашні завдання й оцінки з HUMAN LMS.",
+  "icons": {
+    "16": "icons/human-icon-v4-16.png",
+    "32": "icons/human-icon-v4-32.png",
+    "48": "icons/human-icon-v4-48.png",
+    "128": "icons/human-icon-v4-128.png"
+  },
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://api.human.ua/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "HUMAN Notifications",
+    "default_icon": {
+      "16": "icons/human-icon-v4-16.png",
+      "32": "icons/human-icon-v4-32.png"
+    }
+  }
+}

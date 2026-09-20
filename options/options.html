@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HUMAN Notifications</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="../icons/human-icon-v4-16.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="../icons/human-icon-v4-32.png">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="card">
+    <header class="page-header">
+      <img class="brand-icon" src="../icons/icon-master.png" alt="">
+      <div class="page-header-copy">
+        <h1>HUMAN Notifications</h1>
+        <p class="intro">Локальна історія сповіщень HUMAN.</p>
+      </div>
+    </header>
+    <details id="settings-details" class="settings-details">
+      <summary>Налаштування</summary>
+      <div class="settings-content">
+        <form id="settings-form">
+          <div class="settings-grid">
+            <div class="settings-fields">
+              <label>Email HUMAN<input id="email" type="email" autocomplete="username" required></label>
+              <label>Пароль HUMAN<input id="password" type="password" autocomplete="off"></label>
+            </div>
+            <div class="settings-controls">
+              <div class="interval-row">
+                <div class="interval-control">
+                  <label for="intervalMinutes">Інтервал перевірки, хв</label>
+                  <div class="interval-input-row">
+                    <input id="intervalMinutes" type="number" min="5" max="1440" step="1" required>
+                    <button type="submit">Зберегти</button>
+                  </div>
+                </div>
+              </div>
+              <div class="auth-row">
+                <button type="button" id="check-auth" class="auth-button">Перевірити авторизацію</button>
+                <button type="button" id="check-now" class="secondary">Завантажити сповіщення</button>
+                <button type="button" id="clear-all" class="reset">Очистити все</button>
+              </div>
+              <p id="operation-status" class="operation-status" aria-live="polite"></p>
+            </div>
+          </div>
+        </form>
+        <details class="log-details">
+          <summary>Журнал</summary>
+          <div class="log-toolbar">
+            <button type="button" id="download-logs" class="secondary log-download">Завантажити журнал</button>
+          </div>
+          <div class="table-wrap log-wrap">
+            <table class="log-table">
+              <thead><tr><th>Час</th><th>Нових сповіщень</th><th>HTTP / помилка</th></tr></thead>
+              <tbody id="check-log"><tr><td colspan="3">Перевірок ще немає.</td></tr></tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+    </details>
+    <section class="notifications-section" aria-labelledby="notifications-heading">
+      <h2 id="notifications-heading">Останні сповіщення</h2>
+      <div class="category-filters" role="group" aria-label="Тип сповіщень">
+        <button type="button" class="filter active" data-filter="homework">Домашні завдання</button>
+        <button type="button" class="filter" data-filter="grades">Оцінки</button>
+      </div>
+      <div id="subject-filter-buttons" class="subject-filters" role="group" aria-label="Фільтр за предметом"></div>
+      <div class="table-wrap notifications-table-wrap">
+        <table class="notifications-table">
+          <thead id="notifications-head"><tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th></tr></thead>
+          <tbody id="notifications-table"><tr><td colspan="4">Даних ще немає.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>
