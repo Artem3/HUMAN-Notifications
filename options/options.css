@@ -47,6 +47,16 @@ tr:last-child td { border-bottom: 0; }
 .settings-details summary { color: #53616d; cursor: pointer; font-size: 15px; font-weight: 600; }
 .settings-content { padding-top: 14px; }
 #settings-form { max-width: 100%; }
+.privacy-dialog { width: min(440px, calc(100vw - 36px)); padding: 0; border: 1px solid #b8d1df; border-radius: 12px; color: #25313b; box-shadow: 0 12px 40px #25313b33; }
+.privacy-dialog::backdrop { background: #25313b66; }
+.privacy-dialog form { padding: 22px 24px; }
+.privacy-dialog h2 { margin-bottom: 12px; }
+.privacy-dialog p { margin: 9px 0; color: #52616b; font-size: 14px; line-height: 1.45; }
+.privacy-dialog label { display: flex; align-items: flex-start; gap: 7px; margin: 16px 0; font-size: 13px; font-weight: 500; line-height: 1.4; }
+.privacy-dialog input { margin: 2px 0 0; }
+.privacy-dialog a { color: #185b9e; }
+.privacy-consent-error { margin: -8px 0 12px !important; color: #b04242 !important; font-size: 13px !important; font-weight: 600; }
+.privacy-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .settings-grid { display: grid; grid-template-columns: minmax(220px, 0.8fr) minmax(420px, 1.2fr); gap: 22px; align-items: start; }
 .settings-controls { padding-top: 12px; padding-left: 22px; border-left: 2px solid #c1d3dd; }
 .interval-row { display: block; }

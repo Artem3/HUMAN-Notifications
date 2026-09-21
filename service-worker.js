@@ -9,7 +9,8 @@ const BADGE_BACKGROUND_COLOR = "#D93025";
 const DEFAULTS = {
   email: "",
   password: "",
-  intervalMinutes: 30
+  intervalMinutes: 30,
+  privacyConsent: false
 };
 const storageAccessReady = restrictStorageAccess();
 void ensureAlarmExists().catch((error) => console.error("Could not ensure HUMAN alarm:", safeError(error)));
@@ -50,6 +51,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: true });
     }).catch(async (error) => {
       await logUnexpectedError("save-settings", error);
+      sendResponse({ ok: false, error: safeError(error) });
+    });
+    return true;
+  }
+
+  if (message?.type === "save-privacy-consent") {
+    savePrivacyConsent().then(async () => {
+      await scheduleAlarm();
+      sendResponse({ ok: true });
+    }).catch(async (error) => {
+      await logUnexpectedError("save-privacy-consent", error);
       sendResponse({ ok: false, error: safeError(error) });
     });
     return true;
@@ -119,7 +131,7 @@ async function ensureDefaults() {
   const settings = current.settings
     ? { ...DEFAULTS, ...current.settings, intervalMinutes: clampInterval(current.settings.intervalMinutes) }
     : DEFAULTS;
-  if (!current.settings || settings.intervalMinutes !== current.settings.intervalMinutes) await chrome.storage.local.set({ settings });
+  if (!current.settings || settings.intervalMinutes !== current.settings.intervalMinutes || settings.privacyConsent !== current.settings.privacyConsent) await chrome.storage.local.set({ settings });
   await chrome.storage.local.remove(["authStatus"]);
 }
 
@@ -129,7 +141,8 @@ async function getSettings() {
   return {
     email: String(settings.email || "").trim(),
     password: String(settings.password || ""),
-    intervalMinutes: clampInterval(settings.intervalMinutes)
+    intervalMinutes: clampInterval(settings.intervalMinutes),
+    privacyConsent: settings.privacyConsent === true
   };
 }
 
@@ -140,8 +153,16 @@ async function saveSettings(input = {}) {
     ...settings,
     email: String(input.email || "").trim(),
     password: enteredPassword === "" ? settings.password : enteredPassword,
-    intervalMinutes: clampInterval(input.intervalMinutes)
+    intervalMinutes: clampInterval(input.intervalMinutes),
+    privacyConsent: settings.privacyConsent
   };
+  await chrome.storage.local.set({ settings: next });
+  return publicSettings(next);
+}
+
+async function savePrivacyConsent() {
+  const settings = await getSettings();
+  const next = { ...settings, privacyConsent: true };
   await chrome.storage.local.set({ settings: next });
   return publicSettings(next);
 }
@@ -149,6 +170,7 @@ async function saveSettings(input = {}) {
 async function scheduleAlarm() {
   const settings = await getSettings();
   await chrome.alarms.clear(ALARM_NAME);
+  if (!settings.privacyConsent) return;
   await chrome.alarms.create(ALARM_NAME, {
     delayInMinutes: settings.intervalMinutes,
     periodInMinutes: settings.intervalMinutes
@@ -157,8 +179,12 @@ async function scheduleAlarm() {
 
 async function ensureAlarmExists() {
   const alarm = await chrome.alarms.get(ALARM_NAME);
-  if (alarm) return;
   const settings = await getSettings();
+  if (!settings.privacyConsent) {
+    if (alarm) await chrome.alarms.clear(ALARM_NAME);
+    return;
+  }
+  if (alarm) return;
   await chrome.alarms.create(ALARM_NAME, {
     delayInMinutes: settings.intervalMinutes,
     periodInMinutes: settings.intervalMinutes
@@ -167,8 +193,8 @@ async function ensureAlarmExists() {
 
 async function checkNotifications(trigger) {
   const settings = await getSettings();
-  if (!settings.email || !settings.password) {
-    return writeStatus({ state: "not_configured", message: "Укажіть email і пароль HUMAN у налаштуваннях.", trigger });
+  if (!settings.privacyConsent || !settings.email || !settings.password) {
+    return writeStatus({ state: "not_configured", message: "Підтвердьте обробку даних і вкажіть email та пароль HUMAN.", trigger });
   }
 
   await writeStatus({ state: "checking", message: "Перевіряємо сповіщення HUMAN…", trigger });
@@ -256,8 +282,8 @@ async function checkAuthorization() {
   const checkId = createCheckId();
   try {
     const settings = await getSettings();
-    if (!settings.email || !settings.password) {
-      const result = { state: "not_configured", message: "Введіть email і пароль HUMAN." };
+    if (!settings.privacyConsent || !settings.email || !settings.password) {
+      const result = { state: "not_configured", message: "Підтвердьте обробку даних і введіть email та пароль HUMAN." };
       await appendCheckLogBestEffort({ checkId, operation: "AUTH", level: "WARN", trigger: "auth", ...result, httpStatus: null, durationMs: Date.now() - startedAt });
       return result;
     }
@@ -289,8 +315,9 @@ async function clearAllInternal() {
   const data = await chrome.storage.local.get(["settings"]);
   const email = String(data.settings?.email || "").trim();
   const password = String(data.settings?.password || "");
+  const privacyConsent = data.settings?.privacyConsent === true;
   await chrome.storage.local.clear();
-  await chrome.storage.local.set({ settings: { ...DEFAULTS, email, password } });
+  await chrome.storage.local.set({ settings: { ...DEFAULTS, email, password, privacyConsent } });
   await updateBadge(0);
   await scheduleAlarm();
 }
@@ -798,12 +825,13 @@ async function getState() {
   await storageAccessReady;
   const data = await chrome.storage.local.get(["settings", "status", "notifications", "assessments", "checkLog"]);
   const settings = publicSettings(data.settings || {});
+  const hasConsent = settings.privacyConsent;
   return {
     settings,
-    status: data.status || null,
-    notifications: Array.isArray(data.notifications) ? data.notifications : [],
-    assessments: Array.isArray(data.assessments) ? data.assessments : [],
-    checkLog: Array.isArray(data.checkLog) ? data.checkLog : [],
+    status: hasConsent ? data.status || null : null,
+    notifications: hasConsent && Array.isArray(data.notifications) ? data.notifications : [],
+    assessments: hasConsent && Array.isArray(data.assessments) ? data.assessments : [],
+    checkLog: hasConsent && Array.isArray(data.checkLog) ? data.checkLog : [],
     authStatus: null
   };
 }
@@ -813,7 +841,8 @@ function publicSettings(settings = {}) {
   return {
     email: String(settings.email || "").trim(),
     intervalMinutes: clampInterval(settings.intervalMinutes),
-    hasPassword: password.length > 0
+    hasPassword: password.length > 0,
+    privacyConsent: settings.privacyConsent === true
   };
 }
 

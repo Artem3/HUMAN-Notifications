@@ -7,6 +7,11 @@ let loadRequestId = 0;
 document.addEventListener("DOMContentLoaded", () => { void initializeDashboard(); });
 $("settings-form").addEventListener("submit", save);
 $("settings-form").addEventListener("input", () => { formDirty = true; });
+$("privacy-consent-form").addEventListener("submit", savePrivacyConsent);
+$("privacy-dialog").addEventListener("cancel", declinePrivacyConsent);
+$("privacy-consent").addEventListener("input", () => setPrivacyConsentError(false));
+$("privacy-consent").addEventListener("change", () => setPrivacyConsentError(false));
+$("privacy-decline").addEventListener("click", declinePrivacyConsent);
 $("check-auth").addEventListener("click", checkAuth);
 $("check-now").addEventListener("click", checkNow);
 $("clear-all").addEventListener("click", clearAll);
@@ -38,7 +43,8 @@ async function load({ syncSettings = false } = {}) {
   if (requestId !== loadRequestId) return;
   if (!response?.ok) return setOperationStatus("Не вдалося завантажити стан.");
   const { settings, notifications, assessments, checkLog } = response.state;
-  if (!settings.email || !settings.hasPassword) $("settings-details").open = true;
+  setDashboardButtonsEnabled(settings.privacyConsent === true);
+  if (!settings.privacyConsent || !settings.email || !settings.hasPassword) $("settings-details").open = true;
   if (syncSettings && !formDirty) {
     $("email").value = settings.email || "";
     const passwordInput = $("password");
@@ -49,13 +55,14 @@ async function load({ syncSettings = false } = {}) {
   }
   renderNotifications(notifications || [], assessments || []);
   renderLog(checkLog || []);
-  void markNotificationsSeen();
+  if (settings.privacyConsent) void markNotificationsSeen();
   return response.state;
 }
 
 async function initializeDashboard() {
   const state = await load({ syncSettings: true });
-  if (!state?.settings?.email || !state.settings.hasPassword) return;
+  if (!state?.settings?.privacyConsent) return showPrivacyDialog();
+  if (!state.settings.email || !state.settings.hasPassword) return;
   try {
     await chrome.runtime.sendMessage({ type: "refresh-dashboard" });
   } catch (_error) {
@@ -64,6 +71,48 @@ async function initializeDashboard() {
     await load({ syncSettings: false });
     await markNotificationsSeen();
   }
+}
+
+function showPrivacyDialog() {
+  setDashboardButtonsEnabled(false);
+  const dialog = $("privacy-dialog");
+  if (!dialog.open) dialog.showModal();
+}
+
+function setDashboardButtonsEnabled(enabled) {
+  document.querySelectorAll("main button:not(#privacy-accept):not(#privacy-decline)").forEach((button) => { button.disabled = !enabled; });
+}
+
+function declinePrivacyConsent(event) {
+  event?.preventDefault();
+  $("privacy-dialog").close();
+  setDashboardButtonsEnabled(false);
+}
+
+async function savePrivacyConsent(event) {
+  event.preventDefault();
+  const consent = $("privacy-consent");
+  if (!consent.checked) {
+    setPrivacyConsentError(true);
+    return;
+  }
+  setPrivacyConsentError(false);
+  const button = $("privacy-accept");
+  button.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "save-privacy-consent" });
+    if (!response?.ok) throw new Error(response?.error || "розширення не відповіло");
+    $("privacy-dialog").close();
+    await initializeDashboard();
+  } catch (error) {
+    setOperationError(`Не вдалося зберегти згоду: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function setPrivacyConsentError(visible) {
+  $("privacy-consent-error").hidden = !visible;
 }
 
 async function markNotificationsSeen() {

@@ -73,6 +73,19 @@
         </table>
       </div>
     </section>
+    <dialog id="privacy-dialog" class="privacy-dialog" aria-labelledby="privacy-dialog-title">
+      <form id="privacy-consent-form">
+        <h2 id="privacy-dialog-title">Перед початком</h2>
+        <p>Розширення отримує сповіщення, домашні завдання й оцінки з HUMAN та зберігає їх лише у профілі Chrome.</p>
+        <p>Email і пароль використовуються лише для входу до HUMAN. Розробник і треті сторони цих даних не отримують.</p>
+        <label><input id="privacy-consent" type="checkbox"> Я погоджуюся з <a href="https://github.com/Artem3/HUMAN-Notifications/blob/master/PRIVACY.md" target="_blank" rel="noopener noreferrer">Політикою конфіденційності</a>.</label>
+        <p id="privacy-consent-error" class="privacy-consent-error" role="alert" hidden>Підтвердьте згоду, щоб продовжити.</p>
+        <div class="privacy-dialog-actions">
+          <button type="button" id="privacy-decline" class="secondary">Не погоджуюся</button>
+          <button type="submit" id="privacy-accept">Продовжити</button>
+        </div>
+      </form>
+    </dialog>
   </main>
   <script src="options.js"></script>
 </body>

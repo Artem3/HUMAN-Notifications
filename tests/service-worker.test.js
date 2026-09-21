@@ -100,8 +100,31 @@ test("opening the dashboard clears the local new-notification badge", async () =
 
 test("opening the dashboard requests an immediate refresh when credentials are saved", () => {
   assert.match(optionsSource, /async function initializeDashboard\(\)[\s\S]*?type: "refresh-dashboard"/);
-  assert.match(optionsSource, /if \(!state\?\.settings\?\.email \|\| !state\.settings\.hasPassword\) return/);
+  assert.match(optionsSource, /if \(!state\?\.settings\?\.privacyConsent\) return showPrivacyDialog\(\)/);
+  assert.match(optionsSource, /if \(!state\.settings\.email \|\| !state\.settings\.hasPassword\) return/);
   assert.match(workerSource, /message\?\.type === "refresh-dashboard"[\s\S]*?runCheck\("dashboard-open"\)/);
+});
+
+test("HUMAN checks require privacy consent", async () => {
+  const { context, storage } = loadWorker();
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: false };
+  const result = await vm.runInContext('runCheck("test")', context);
+  assert.equal(result.state, "not_configured");
+  assert.match(result.message, /Підтвердьте обробку даних/);
+});
+
+test("the privacy popup uses an inline consent error instead of browser validation", () => {
+  assert.match(optionsHtml, /<dialog id="privacy-dialog"/);
+  assert.match(optionsHtml, /id="privacy-consent" type="checkbox"/);
+  assert.match(optionsHtml, /id="privacy-consent-error"/);
+  assert.match(optionsHtml, /id="privacy-decline"/);
+  assert.match(optionsHtml, /PRIVACY\.md/);
+  assert.match(optionsSource, /type: "save-privacy-consent"/);
+  assert.match(optionsSource, /const consent = \$\("privacy-consent"\);/);
+  assert.match(optionsSource, /if \(!consent\.checked\)/);
+  assert.match(optionsSource, /setPrivacyConsentError\(false\);/);
+  assert.match(optionsSource, /function declinePrivacyConsent/);
+  assert.match(optionsSource, /main button:not\(#privacy-accept\):not\(#privacy-decline\)/);
 });
 
 test("settings automatically open when no HUMAN account is saved", () => {
@@ -132,9 +155,9 @@ test("the subject column uses the Ukrainian label in the initial and rendered ta
   assert.match(optionsSource, /<th>Предмет<\/th>/);
 });
 
-test("a missing periodic alarm is recreated when the worker starts", async () => {
+test("a missing periodic alarm is recreated when consent is saved", async () => {
   const { context, storage } = loadWorker();
-  storage.settings = { email: "", password: "", intervalMinutes: 45 };
+  storage.settings = { email: "", password: "", intervalMinutes: 45, privacyConsent: true };
   let created = null;
   context.chrome.alarms.get = async () => null;
   context.chrome.alarms.create = async (name, info) => { created = { name, info }; };
@@ -151,30 +174,45 @@ test("storage is restricted to trusted extension contexts", async () => {
 
 test("getState never returns the stored password", async () => {
   const { context, storage } = loadWorker();
-  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30 };
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
   storage.assessments = [{ id: "assessment:1" }];
   const state = await vm.runInContext("getState()", context);
   assert.equal(state.settings.email, "student@example.com");
   assert.equal(state.settings.hasPassword, true);
+  assert.equal(state.settings.privacyConsent, true);
   assert.equal(Object.hasOwn(state.settings, "password"), false);
   assert.equal(state.assessments.length, 1);
   assert.equal(storage.settings.password, "secret-password");
 });
 
+test("getState hides saved HUMAN data until privacy consent is given", async () => {
+  const { context, storage } = loadWorker();
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: false };
+  storage.notifications = [{ id: "notification:1" }];
+  storage.assessments = [{ id: "assessment:1" }];
+  storage.checkLog = [{ state: "ok" }];
+  const state = await vm.runInContext("getState()", context);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.notifications)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.assessments)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.checkLog)), []);
+  assert.equal(state.status, null);
+});
+
 test("saving settings with a blank password preserves the existing password", async () => {
   const { context, storage } = loadWorker();
-  storage.settings = { email: "old@example.com", password: "secret-password", intervalMinutes: 30 };
+  storage.settings = { email: "old@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
   await vm.runInContext(`saveSettings({ email: "new@example.com", password: "", intervalMinutes: 45 })`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(storage.settings)), {
     email: "new@example.com",
     password: "secret-password",
-    intervalMinutes: 45
+    intervalMinutes: 45,
+    privacyConsent: true
   });
 });
 
 test("clearAll resets data but preserves the credentials used for reauthorization", async () => {
   const { context, storage } = loadWorker();
-  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 45 };
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 45, privacyConsent: true };
   storage.notifications = [{ id: "1" }];
   storage.assessments = [{ id: "assessment:1" }];
   storage.checkLog = [{ message: "old" }];
@@ -182,7 +220,8 @@ test("clearAll resets data but preserves the credentials used for reauthorizatio
   assert.deepEqual(JSON.parse(JSON.stringify(storage.settings)), {
     email: "student@example.com",
     password: "secret-password",
-    intervalMinutes: 30
+    intervalMinutes: 30,
+    privacyConsent: true
   });
   assert.equal(Object.hasOwn(storage, "notifications"), false);
   assert.equal(Object.hasOwn(storage, "assessments"), false);
@@ -376,7 +415,7 @@ test("assessment history is not requested when HUMAN has no active academic year
 
 test("a full check stores notifications and the separate complete grade source", async () => {
   const { context, storage } = loadWorker();
-  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30 };
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
   storage.assessments = Array.from({ length: 3264 }, (_, index) => ({ id: `old:${index}` }));
   let notificationBatch = [{ id: 1, uid: "notification", created_at: "2026-09-20T08:00:00Z", data: {} }];
   context.fetch = async (url) => {
@@ -437,7 +476,7 @@ test("appendCheckLog keeps only the newest 100 records", async () => {
 
 test("clearAll waits for an active check before removing its results", async () => {
   const { context, storage } = loadWorker();
-  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30 };
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
   storage.notifications = [{ id: "old" }];
   vm.runInContext(`activeCheckPromise = new Promise((resolve) => { globalThis.releaseActiveCheck = resolve; })`, context);
   const clearPromise = vm.runInContext("clearAll()", context);
@@ -456,7 +495,7 @@ test("safeError turns an aborted request into a useful safe message", () => {
 
 test("network failures are written to the local check log without credentials", async () => {
   const { context, storage } = loadWorker();
-  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30 };
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
   const result = await vm.runInContext('runCheck("test")', context);
   assert.equal(result.state, "network_error");
   assert.equal(storage.checkLog[0].state, "network_error");
