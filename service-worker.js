@@ -5,6 +5,7 @@ const MAX_CHECK_LOG = 100;
 const ASSESSMENT_DETAIL_LIMIT = 100;
 const MAX_NOTIFICATION_STORAGE_BYTES = 7 * 1024 * 1024;
 const MAX_BADGE_COUNT = 99;
+const BADGE_BACKGROUND_COLOR = "#D93025";
 const DEFAULTS = {
   email: "",
   password: "",
@@ -56,6 +57,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === "check-now") {
     runCheck("manual")
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: safeError(error) }));
+    return true;
+  }
+
+  if (message?.type === "refresh-dashboard") {
+    runCheck("dashboard-open")
       .then((result) => sendResponse({ ok: true, result }))
       .catch((error) => sendResponse({ ok: false, error: safeError(error) }));
     return true;
@@ -309,6 +317,7 @@ async function markNotificationsSeen() {
 async function updateBadge(value, persist = false) {
   const count = normalizeUnseenCount(value);
   if (persist) await chrome.storage.local.set({ unseenCount: count });
+  await chrome.action.setBadgeBackgroundColor({ color: BADGE_BACKGROUND_COLOR });
   await chrome.action.setBadgeText({ text: badgeText(count) });
 }
 

@@ -4,7 +4,7 @@ let activeSubject = "all";
 let formDirty = false;
 let loadRequestId = 0;
 
-document.addEventListener("DOMContentLoaded", () => load({ syncSettings: true }));
+document.addEventListener("DOMContentLoaded", () => { void initializeDashboard(); });
 $("settings-form").addEventListener("submit", save);
 $("settings-form").addEventListener("input", () => { formDirty = true; });
 $("check-auth").addEventListener("click", checkAuth);
@@ -50,6 +50,20 @@ async function load({ syncSettings = false } = {}) {
   renderNotifications(notifications || [], assessments || []);
   renderLog(checkLog || []);
   void markNotificationsSeen();
+  return response.state;
+}
+
+async function initializeDashboard() {
+  const state = await load({ syncSettings: true });
+  if (!state?.settings?.email || !state.settings.hasPassword) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "refresh-dashboard" });
+  } catch (_error) {
+    // The saved history remains visible if the service worker is restarting.
+  } finally {
+    await load({ syncSettings: false });
+    await markNotificationsSeen();
+  }
 }
 
 async function markNotificationsSeen() {

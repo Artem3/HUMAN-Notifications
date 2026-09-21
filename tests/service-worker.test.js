@@ -22,6 +22,7 @@ function loadWorker() {
       onClicked: {
         addListener(listener) { storage.actionClickListener = listener; }
       },
+      async setBadgeBackgroundColor({ color }) { storage.badgeBackgroundColor = color; },
       async setBadgeText({ text }) { storage.badgeText = text; }
     },
     alarms: {
@@ -80,6 +81,7 @@ test("badge stores the accumulated number of new notifications and caps its text
   const { context, storage } = loadWorker();
   await vm.runInContext("incrementUnseenCount(3)", context);
   assert.equal(storage.unseenCount, 3);
+  assert.equal(storage.badgeBackgroundColor, "#D93025");
   assert.equal(storage.badgeText, "3");
   await vm.runInContext("incrementUnseenCount(98)", context);
   assert.equal(storage.unseenCount, 101);
@@ -94,6 +96,12 @@ test("opening the dashboard clears the local new-notification badge", async () =
   await vm.runInContext("markNotificationsSeen()", context);
   assert.equal(storage.unseenCount, 0);
   assert.equal(storage.badgeText, "");
+});
+
+test("opening the dashboard requests an immediate refresh when credentials are saved", () => {
+  assert.match(optionsSource, /async function initializeDashboard\(\)[\s\S]*?type: "refresh-dashboard"/);
+  assert.match(optionsSource, /if \(!state\?\.settings\?\.email \|\| !state\.settings\.hasPassword\) return/);
+  assert.match(workerSource, /message\?\.type === "refresh-dashboard"[\s\S]*?runCheck\("dashboard-open"\)/);
 });
 
 test("settings automatically open when no HUMAN account is saved", () => {
