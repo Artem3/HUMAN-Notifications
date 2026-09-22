@@ -4,6 +4,7 @@ let activeSubject = "all";
 let formDirty = false;
 let loadRequestId = 0;
 
+$("extension-version").textContent = `v${chrome.runtime.getManifest().version}`;
 document.addEventListener("DOMContentLoaded", () => { void initializeDashboard(); });
 $("settings-form").addEventListener("submit", save);
 $("settings-form").addEventListener("input", () => { formDirty = true; });
@@ -370,7 +371,7 @@ function gradeClass(data) {
 }
 function notificationTitle(data) { return data.title ?? data.name ?? data.themeTitle ?? data.theme_title ?? data.lessonTitle ?? data.lessonName ?? data.activityTypeName ?? data.activity_type_name ?? data.message ?? "—"; }
 function logResult(item) {
-  const detail = item.detail ? ` — ${item.detail}` : "";
+  const detail = item.detail ? `. ${item.detail}` : "";
   if (item.httpStatus) return `${item.httpStatus} ${httpStatusText(item.httpStatus)}${detail}`;
   if (item.state === "ok") return `200 OK${detail}`;
   if (item.state === "network_error") return `Network error${detail}`;

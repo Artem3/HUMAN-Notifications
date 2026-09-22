@@ -43,8 +43,10 @@ th:not(:last-child) { border-right: 2px solid #ffffff; }
 .notifications-table .home-task-open:hover { border-color: #6f9fc2; background: #ffffff; color: #1d5ea9; transform: translateY(-1px); }
 .notifications-table .home-task-open:focus-visible { outline: 2px solid #6f9fc2; outline-offset: 2px; }
 tr:last-child td { border-bottom: 0; }
-.settings-details { margin: 0; padding: 14px 18px 16px; border: 1px solid #b8d1df; border-radius: 10px; background: #e4f1f7; box-shadow: 0 2px 12px #46758b1c; }
+.settings-details { position: relative; margin: 0; padding: 14px 18px 16px; border: 1px solid #b8d1df; border-radius: 10px; background: #e4f1f7; box-shadow: 0 2px 12px #46758b1c; }
 .settings-details summary { color: #53616d; cursor: pointer; font-size: 15px; font-weight: 600; }
+.extension-version { position: absolute; top: 15px; right: 18px; color: #7a8993; font-size: 12px; font-weight: 500; letter-spacing: .01em; }
+.settings-details:not([open]) .extension-version { display: none; }
 .settings-content { padding-top: 14px; }
 #settings-form { max-width: 100%; }
 .privacy-dialog { width: min(440px, calc(100vw - 36px)); padding: 0; border: 1px solid #b8d1df; border-radius: 12px; color: #25313b; box-shadow: 0 12px 40px #25313b33; }
@@ -89,13 +91,14 @@ button.secondary { background: #dcebf8; color: #185b9e; border: 1px solid #78a6d
 .log-download { padding: 6px 10px; font-size: 12px; }
 .log-download:disabled { opacity: .65; cursor: wait; }
 .log-wrap { max-height: 250px; margin-top: 10px; overflow-y: auto; scrollbar-gutter: stable; }
-.log-table { min-width: 560px; font-size: 12px; color: #63717b; }
+.log-table { min-width: 560px; table-layout: fixed; font-size: 12px; color: #63717b; }
 .log-table th, .log-table td { padding-top: 5px; padding-bottom: 5px; }
+.log-table th:nth-child(1), .log-table td:nth-child(1) { width: 136px; white-space: nowrap; }
+.log-table th:nth-child(2), .log-table td:nth-child(2) { width: 48px; padding-left: 4px; padding-right: 4px; text-align: center; white-space: nowrap; }
 .log-table tbody tr:hover td { background: #edf7fc; box-shadow: inset 0 1px #6f9fc2, inset 0 -1px #6f9fc2; }
 .log-table tbody tr:hover td:first-child { box-shadow: inset 1px 0 #6f9fc2, inset 0 1px #6f9fc2, inset 0 -1px #6f9fc2; }
 .log-table tbody tr:hover td:last-child { box-shadow: inset -1px 0 #6f9fc2, inset 0 1px #6f9fc2, inset 0 -1px #6f9fc2; }
-.log-table td:nth-child(2) { width: 130px; text-align: center; }
-.log-table td:nth-child(3) { color: #25313b; }
+.log-table td:nth-child(3) { color: #25313b; overflow-wrap: break-word; }
 .notifications-table-wrap tr.day-divider td { border-bottom: 3px solid #6f7e88; }
 @media (max-width: 700px) { .settings-grid { grid-template-columns: 1fr; gap: 4px; } .settings-controls { padding-left: 0; border-left: 0; } .settings-controls .auth-row { margin-top: 15px; } .auth-row { flex-wrap: wrap; } }
 @media (max-width: 640px) { body { padding: 12px 8px; } .card { padding: 18px 14px; } }

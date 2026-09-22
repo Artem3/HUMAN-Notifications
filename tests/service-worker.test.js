@@ -8,6 +8,7 @@ const workerPath = path.join(__dirname, "..", "service-worker.js");
 const workerSource = fs.readFileSync(workerPath, "utf8");
 const optionsHtml = fs.readFileSync(path.join(__dirname, "..", "options", "options.html"), "utf8");
 const optionsSource = fs.readFileSync(path.join(__dirname, "..", "options", "options.js"), "utf8");
+const optionsCss = fs.readFileSync(path.join(__dirname, "..", "options", "options.css"), "utf8");
 
 function loadWorker() {
   const storage = {};
@@ -129,8 +130,11 @@ test("the privacy popup uses an inline consent error instead of browser validati
 
 test("settings automatically open when no HUMAN account is saved", () => {
   assert.match(optionsHtml, /id="settings-details"/);
+  assert.match(optionsHtml, /id="extension-version"/);
   assert.match(optionsSource, /!settings\.email\s*\|\|\s*!settings\.hasPassword/);
   assert.match(optionsSource, /\$\("settings-details"\)\.open\s*=\s*true/);
+  assert.match(optionsSource, /\$\("extension-version"\)\.textContent = `v\$\{chrome\.runtime\.getManifest\(\)\.version\}`/);
+  assert.match(optionsCss, /\.settings-details:not\(\[open\]\) \.extension-version \{ display: none;/);
 });
 
 test("diagnostic export includes an up-to-date local storage size", () => {
@@ -153,6 +157,14 @@ test("the subject column uses the Ukrainian label in the initial and rendered ta
   assert.doesNotMatch(optionsSource, /Курс\s*\/\s*група/);
   assert.match(optionsHtml, /<th>Предмет<\/th>/);
   assert.match(optionsSource, /<th>Предмет<\/th>/);
+});
+
+test("the log gives its narrow new-count column to the diagnostic result", () => {
+  assert.match(optionsHtml, /<th>Час<\/th><th>Нових<\/th><th>HTTP \/ помилка<\/th>/);
+  assert.match(optionsCss, /\.log-table th:nth-child\(2\), \.log-table td:nth-child\(2\) \{ width: 48px;/);
+  assert.match(optionsCss, /\.log-table th:nth-child\(1\), \.log-table td:nth-child\(1\) \{ width: 136px;/);
+  assert.match(optionsCss, /\.log-table \{ min-width: 560px; table-layout: fixed;/);
+  assert.match(optionsSource, /const detail = item\.detail \? `\. \$\{item\.detail\}` : "";/);
 });
 
 test("a missing periodic alarm is recreated when consent is saved", async () => {
