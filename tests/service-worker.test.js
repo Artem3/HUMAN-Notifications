@@ -328,6 +328,66 @@ test("summary reconciliation attaches metadata only by a stable assessment id", 
   assert.match(item.createdAt, /^2026-/);
 });
 
+test("grade notifications move their exact assessment match to the notification time", () => {
+  const { context } = loadWorker();
+  const result = vm.runInContext(`mergeAssessmentNotificationTimes([
+    {
+      id: "assessment:498801127",
+      createdAt: "2026-09-07T12:30:00.000Z",
+      data: { assessmentId: 498801127, subjectName: "Географія", gradeDisplayValue: "12" }
+    },
+    {
+      id: "assessment:498702520",
+      createdAt: "2026-09-22T09:30:00.000Z",
+      data: { assessmentId: 498702520, subjectName: "Іноземна мова (англійська)", gradeDisplayValue: "11" }
+    }
+  ], [
+    {
+      id: "older-grade-notification",
+      type: "grade_home_task",
+      createdAt: "2026-09-20 14:00:00",
+      data: { assessmentId: 498801127 }
+    },
+    {
+      id: "499339884",
+      type: "grade_home_task",
+      createdAt: "2026-09-22 21:34:58",
+      data: { assessmentId: 498801127 }
+    },
+    {
+      id: "ignored-type",
+      type: "home_task_created",
+      createdAt: "2026-09-23 10:00:00",
+      data: { assessmentId: 498702520 }
+    },
+    {
+      id: "unmatched",
+      type: "grade_lesson_task",
+      createdAt: "2026-09-23 11:00:00",
+      data: { assessmentId: 999999999 }
+    }
+  ])`, context);
+  const merge = JSON.parse(JSON.stringify(result));
+  const items = merge.items;
+  assert.equal(items[0].data.assessmentId, 498801127);
+  assert.equal(items[0].createdAt, "2026-09-22 21:34:58");
+  assert.equal(items[0].data.assessmentCreatedAt, "2026-09-07T12:30:00.000Z");
+  assert.equal(items[0].data.notificationCreatedAt, "2026-09-22 21:34:58");
+  assert.equal(items[1].createdAt, "2026-09-22T09:30:00.000Z");
+  assert.deepEqual(merge.diagnostics, {
+    gradeNotificationCount: 3,
+    gradeNotificationsWithAssessmentId: 3,
+    uniqueGradeAssessmentCount: 2,
+    linkedAssessmentCount: 1,
+    unmatchedAssessmentCount: 1,
+    notificationTimeAppliedCount: 1
+  });
+  assert.equal(
+    vm.runInContext(`formatGradeNotificationDiagnostics(${JSON.stringify(merge.diagnostics)}, 2)`, context),
+    "Нові оцінки: 2/3; з ID: 3; унік.: 2; збігів: 1; без пари: 1; оновлено: 1."
+  );
+});
+
 test("notification history keeps newest entries within the byte budget", () => {
   const { context } = loadWorker();
   const result = vm.runInContext(`fitNotificationsToStorage(
@@ -450,6 +510,7 @@ test("a full check stores notifications and the separate complete grade source",
   assert.equal(storage.checkLog[0].operation, "CHECK");
   assert.equal(storage.checkLog[0].level, "INFO");
   assert.match(storage.checkLog[0].checkId, /^check-/);
+  assert.match(storage.checkLog[0].detail, /^Сповіщення: 1\/1\. Оцінки: 2; предметів: 2\. Нові оцінки: 0\/0;/);
   assert.doesNotMatch(JSON.stringify(storage.checkLog), /secret-password/);
   assert.equal(Object.hasOwn(storage, "unseenCount"), false, "the first sync establishes a baseline");
 

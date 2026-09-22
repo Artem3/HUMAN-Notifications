@@ -230,7 +230,7 @@ async function checkNotifications(trigger) {
   await chrome.storage.local.remove(["notificationIds"]);
   if (hasNotificationBaseline) await incrementUnseenCount(newItems.length);
 
-  const details = [`Відповідь HUMAN: ${notifications.length}. Локальна історія: ${merged.length}.`];
+  const details = [`Сповіщення: ${notifications.length}/${merged.length}.`];
   if (merged.length < completeHistory.length) details.push(`Видалено старих сповіщень для дотримання ліміту Chrome: ${completeHistory.length - merged.length}.`);
   if (enrichment.warnings.length) details.push(`Не вдалося визначити предмет для ${enrichment.warnings.length} тем.`);
 
@@ -258,10 +258,13 @@ async function checkNotifications(trigger) {
 
   const detailedAssessments = normalizeAssessments(assessmentsResponse.detailed);
   const summaryAssessments = normalizeAssessmentSummary(assessmentsResponse.summary);
-  const assessments = reconcileAssessments(detailedAssessments, summaryAssessments);
+  const analyticsAssessments = reconcileAssessments(detailedAssessments, summaryAssessments);
+  const assessmentMerge = mergeAssessmentNotificationTimes(analyticsAssessments, merged);
+  const assessments = assessmentMerge.items;
   const subjectCount = new Set(assessments.map((item) => assessmentSubject(item.data)).filter(Boolean)).size;
   await chrome.storage.local.set({ assessments });
-  details.push(`Оцінки HUMAN: ${assessments.length}; предметів: ${subjectCount}; докладних записів: ${detailedAssessments.length}.`);
+  details.push(`Оцінки: ${assessments.length}; предметів: ${subjectCount}.`);
+  details.push(formatGradeNotificationDiagnostics(assessmentMerge.diagnostics, countGradeNotifications(notifications)));
   if (assessmentsResponse.warnings.length) details.push(assessmentsResponse.warnings.join(" "));
 
   return writeStatus({
@@ -762,6 +765,73 @@ function reconcileAssessments(detailed, summary) {
     return matches?.length ? matches.shift() : item;
   });
   return result.sort(compareAssessments);
+}
+
+function mergeAssessmentNotificationTimes(assessmentItems, notificationItems) {
+  const latestNotifications = new Map();
+  let gradeNotificationCount = 0;
+  let gradeNotificationsWithAssessmentId = 0;
+  for (const notification of Array.isArray(notificationItems) ? notificationItems : []) {
+    if (!isGradeNotification(notification)) continue;
+    gradeNotificationCount += 1;
+    const assessmentId = assessmentNotificationId(notification);
+    if (!assessmentId) continue;
+    gradeNotificationsWithAssessmentId += 1;
+    if (!notification?.createdAt) continue;
+    const previous = latestNotifications.get(assessmentId);
+    if (!previous || notificationTimestamp(notification.createdAt) > notificationTimestamp(previous.createdAt)) {
+      latestNotifications.set(assessmentId, notification);
+    }
+  }
+
+  const analyticsIds = new Set((Array.isArray(assessmentItems) ? assessmentItems : []).map(assessmentNotificationId).filter(Boolean));
+  const linkedAssessmentCount = [...latestNotifications.keys()].filter((assessmentId) => analyticsIds.has(assessmentId)).length;
+  const items = (Array.isArray(assessmentItems) ? assessmentItems : []).map((assessment) => {
+    const notification = latestNotifications.get(assessmentNotificationId(assessment));
+    if (!notification) return assessment;
+    return {
+      ...assessment,
+      createdAt: notification.createdAt,
+      data: {
+        ...assessment.data,
+        assessmentCreatedAt: assessment.createdAt,
+        notificationCreatedAt: notification.createdAt
+      }
+    };
+  }).sort(compareAssessments);
+
+  return {
+    items,
+    diagnostics: {
+      gradeNotificationCount,
+      gradeNotificationsWithAssessmentId,
+      uniqueGradeAssessmentCount: latestNotifications.size,
+      linkedAssessmentCount,
+      unmatchedAssessmentCount: latestNotifications.size - linkedAssessmentCount,
+      notificationTimeAppliedCount: linkedAssessmentCount
+    }
+  };
+}
+
+function isGradeNotification(item) {
+  return /^grade_(home|lesson)_task$/i.test(String(item?.type || ""));
+}
+
+function countGradeNotifications(items) {
+  return (Array.isArray(items) ? items : []).filter(isGradeNotification).length;
+}
+
+function assessmentNotificationId(item) {
+  return String(item?.data?.assessmentId ?? item?.data?.assessment_id ?? "").trim();
+}
+
+function notificationTimestamp(value) {
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function formatGradeNotificationDiagnostics(diagnostics = {}, receivedGradeNotificationCount = 0) {
+  return `Нові оцінки: ${Number(receivedGradeNotificationCount) || 0}/${Number(diagnostics.gradeNotificationCount) || 0}; з ID: ${Number(diagnostics.gradeNotificationsWithAssessmentId) || 0}; унік.: ${Number(diagnostics.uniqueGradeAssessmentCount) || 0}; збігів: ${Number(diagnostics.linkedAssessmentCount) || 0}; без пари: ${Number(diagnostics.unmatchedAssessmentCount) || 0}; оновлено: ${Number(diagnostics.notificationTimeAppliedCount) || 0}.`;
 }
 
 function assessmentMatchKey(item) {
