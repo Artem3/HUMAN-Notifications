@@ -4,7 +4,7 @@
 
 ![Інтерфейс HUMAN Notifications](docs/dashboard.png)
 
-> Посилання на Chrome Web Store буде додано після публікації.
+> [Встановити HUMAN Notifications із Chrome Web Store](https://chromewebstore.google.com/detail/human-notifications/npocbglbgeoabpahaohbbpjkblhaehjl)
 
 ## Можливості
 

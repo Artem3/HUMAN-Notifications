@@ -11,10 +11,17 @@ h3 { margin: 24px 0 10px; font-size: 14px; color: #5f6b76; font-weight: 600; }
 .notifications-section { margin-top: 26px; margin-bottom: 26px; }
 .category-filters { display: flex; gap: 22px; padding: 0 0 9px; border-bottom: 1px solid #ccd4d9; }
 button { border: 0; border-radius: 7px; padding: 9px 12px; background: #2d6fc4; color: white; font: inherit; cursor: pointer; }
-button.filter { padding: 8px 14px 9px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; margin-bottom: -1px; background: transparent; color: #69757e; font-size: 15px; font-weight: 600; }
+button.filter { position: relative; padding: 8px 14px 9px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; margin-bottom: -1px; background: transparent; color: #69757e; font-size: 15px; font-weight: 600; }
 button.filter.active { border-color: #b8cdd8; background: #d8e8f1; color: #465b68; }
 button.filter[data-filter="grades"].active { border-color: #c9bfdc; background: #e7e2f2; color: #5e5570; }
 button.filter:not(.active):hover { background: #f2f5f7; }
+.filter-count { position: absolute; top: -7px; right: -9px; z-index: 2; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 4px; border: 1px solid #000; border-radius: 999px; background: #d8e8f1; color: #465b68; font-size: 11px; font-weight: 750; line-height: 16px; text-align: center; box-shadow: 0 1px 3px #25313b22; opacity: 1; transform: scale(1); transition: opacity .18s ease, transform .18s ease; }
+button.filter[data-filter="grades"] .filter-count { background: #e7e2f2; color: #5e5570; }
+.filter-count.is-clearing { opacity: 0; transform: scale(.2); }
+.mark-notifications-read { display: grid; width: 34px; height: 34px; min-width: 34px; margin: 0 0 1px auto; padding: 0; place-items: center; border: 1px solid #9eb7c8; border-radius: 8px; background: #edf5f9; color: #376981; transition: color .18s ease, background .18s ease, border-color .18s ease, opacity .18s ease; }
+.mark-notifications-read svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.mark-notifications-read:disabled { border-color: #c8d3da; background: #f4f7f8; color: #9aa9b2; cursor: default; opacity: .88; }
+.mark-notifications-read:focus-visible { outline: 2px solid #6f9fc2; outline-offset: 2px; }
 .subject-filters { display: flex; flex-wrap: wrap; gap: 6px; min-height: 27px; margin: 13px 0 14px; }
 button.subject-filter { padding: 5px 10px; background: #edf1f4; color: #52616b; border: 1px solid #b9c5cc; font-size: 13px; }
 button.subject-filter.active { box-shadow: inset 0 0 0 2px #ffffffdd, 0 0 0 2px #6f7e88; font-weight: 650; }
@@ -30,6 +37,11 @@ th:not(:last-child) { border-right: 2px solid #ffffff; }
 .notifications-table .date-cell { white-space: nowrap; line-height: 1.35; }
 .notifications-table th:first-child, .notifications-table td:first-child { width: 30px; max-width: 30px; padding-left: 4px; padding-right: 4px; text-align: center; }
 .notifications-table .notification-number { color: #61717c; font-weight: 400; }
+.notification-number-content { display: flex; min-height: 30px; flex-direction: column; align-items: center; justify-content: flex-start; gap: 4px; }
+.notification-new-dot { width: 9px; height: 9px; flex: 0 0 9px; border: 1px solid #2d6fc4; border-radius: 50%; background: #2d6fc4; box-shadow: 0 1px 2px #25313b55; opacity: 1; transform: scale(1); transition: opacity .18s ease, transform .18s ease; }
+.grades-table .notification-new-dot { border-color: #7651a8; background: #7651a8; }
+.notification-new-dot.is-placeholder { visibility: hidden; }
+.notification-new-dot.is-clearing { opacity: 0; transform: scale(.2); }
 .notifications-table .grade-value { font-weight: 700; }
 .notifications-table .grade-cell { text-align: center; vertical-align: middle; }
 .notifications-table .grade-value.grade-high { color: #2f8a55; font-weight: 800; }

@@ -4,8 +4,6 @@ const REQUEST_TIMEOUT_MS = 30000;
 const MAX_CHECK_LOG = 100;
 const ASSESSMENT_DETAIL_LIMIT = 100;
 const MAX_NOTIFICATION_STORAGE_BYTES = 7 * 1024 * 1024;
-const MAX_BADGE_COUNT = 99;
-const BADGE_BACKGROUND_COLOR = "#D93025";
 const DEFAULTS = {
   email: "",
   password: "",
@@ -14,7 +12,6 @@ const DEFAULTS = {
 };
 const storageAccessReady = restrictStorageAccess();
 void ensureAlarmExists().catch((error) => console.error("Could not ensure HUMAN alarm:", safeError(error)));
-void restoreBadge().catch((error) => console.error("Could not restore HUMAN badge:", safeError(error)));
 
 async function restrictStorageAccess() {
   try {
@@ -108,12 +105,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === "mark-notifications-seen") {
-    markNotificationsSeen()
+  if (message?.type === "mark-notifications-read-locally") {
+    markNotificationsReadLocally(message.category)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: safeError(error) }));
     return true;
   }
+
 });
 
 async function runLifecycle(trigger) {
@@ -219,16 +217,18 @@ async function checkNotifications(trigger) {
   const assessmentsPromise = getAssessments(response.institution);
   const enrichment = await enrichmentPromise;
   const notifications = enrichment.items;
-  const old = await chrome.storage.local.get(["notifications"]);
+  const old = await chrome.storage.local.get(["notifications", "unseenNotificationIds"]);
   const hasNotificationBaseline = Array.isArray(old.notifications);
   const oldNotifications = Array.isArray(old.notifications) ? old.notifications : [];
   const knownIds = new Set(oldNotifications.filter((item) => item && item.id != null).map((item) => String(item.id)));
   const newItems = notifications.filter((item) => !knownIds.has(item.id));
   const completeHistory = mergeNotifications(oldNotifications, notifications);
   const merged = fitNotificationsToStorage(completeHistory);
-  await chrome.storage.local.set({ notifications: merged });
+  const unseenNotificationIds = hasNotificationBaseline
+    ? mergeUnseenNotificationIds(old.unseenNotificationIds, newItems.filter(isTrackableNotification).map((item) => item.id), merged)
+    : [];
+  await chrome.storage.local.set({ notifications: merged, unseenNotificationIds });
   await chrome.storage.local.remove(["notificationIds"]);
-  if (hasNotificationBaseline) await incrementUnseenCount(newItems.length);
 
   const details = [`Сповіщення: ${notifications.length}/${merged.length}.`];
   if (merged.length < completeHistory.length) details.push(`Видалено старих сповіщень для дотримання ліміту Chrome: ${completeHistory.length - merged.length}.`);
@@ -321,45 +321,29 @@ async function clearAllInternal() {
   const privacyConsent = data.settings?.privacyConsent === true;
   await chrome.storage.local.clear();
   await chrome.storage.local.set({ settings: { ...DEFAULTS, email, password, privacyConsent } });
-  await updateBadge(0);
   await scheduleAlarm();
 }
 
-async function restoreBadge() {
+async function markNotificationsReadLocally(category) {
   await storageAccessReady;
-  const { unseenCount = 0 } = await chrome.storage.local.get(["unseenCount"]);
-  await updateBadge(unseenCount);
+  const selectedCategory = category === "grades" ? "grades" : "homework";
+  const data = await chrome.storage.local.get(["notifications", "unseenNotificationIds"]);
+  const notificationById = new Map((Array.isArray(data.notifications) ? data.notifications : []).map((item) => [String(item?.id ?? ""), item]));
+  const unseenNotificationIds = normalizeUnseenNotificationIds(data.unseenNotificationIds).filter((id) => {
+    const notification = notificationById.get(id);
+    return selectedCategory === "grades" ? !isGradeNotification(notification) : !isHomeworkNotification(notification);
+  });
+  await chrome.storage.local.set({ unseenNotificationIds });
 }
 
-async function incrementUnseenCount(amount) {
-  const increment = Math.max(0, Math.trunc(Number(amount) || 0));
-  if (increment === 0) return;
-  await storageAccessReady;
-  const { unseenCount = 0 } = await chrome.storage.local.get(["unseenCount"]);
-  await updateBadge(normalizeUnseenCount(unseenCount) + increment, true);
+function normalizeUnseenNotificationIds(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map((id) => String(id).trim()).filter(Boolean))];
 }
 
-async function markNotificationsSeen() {
-  await storageAccessReady;
-  await updateBadge(0, true);
-}
-
-async function updateBadge(value, persist = false) {
-  const count = normalizeUnseenCount(value);
-  if (persist) await chrome.storage.local.set({ unseenCount: count });
-  await chrome.action.setBadgeBackgroundColor({ color: BADGE_BACKGROUND_COLOR });
-  await chrome.action.setBadgeText({ text: badgeText(count) });
-}
-
-function normalizeUnseenCount(value) {
-  const count = Math.trunc(Number(value) || 0);
-  return Math.max(0, count);
-}
-
-function badgeText(count) {
-  const normalized = normalizeUnseenCount(count);
-  if (normalized === 0) return "";
-  return normalized > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : String(normalized);
+function mergeUnseenNotificationIds(previousIds, newIds, notifications) {
+  const availableIds = new Set((Array.isArray(notifications) ? notifications : []).map((item) => String(item?.id ?? "")).filter(Boolean));
+  return normalizeUnseenNotificationIds([...normalizeUnseenNotificationIds(previousIds), ...normalizeUnseenNotificationIds(newIds)])
+    .filter((id) => availableIds.has(id));
 }
 
 let activeCheckPromise = null;
@@ -795,7 +779,8 @@ function mergeAssessmentNotificationTimes(assessmentItems, notificationItems) {
       data: {
         ...assessment.data,
         assessmentCreatedAt: assessment.createdAt,
-        notificationCreatedAt: notification.createdAt
+        notificationCreatedAt: notification.createdAt,
+        notificationId: notification.id
       }
     };
   }).sort(compareAssessments);
@@ -815,6 +800,14 @@ function mergeAssessmentNotificationTimes(assessmentItems, notificationItems) {
 
 function isGradeNotification(item) {
   return /^grade_(home|lesson)_task$/i.test(String(item?.type || ""));
+}
+
+function isTrackableNotification(item) {
+  return isHomeworkNotification(item) || isGradeNotification(item);
+}
+
+function isHomeworkNotification(item) {
+  return String(item?.type || "").toLowerCase().startsWith("home_task_");
 }
 
 function countGradeNotifications(items) {
@@ -893,7 +886,7 @@ async function writeStatus(status) {
 
 async function getState() {
   await storageAccessReady;
-  const data = await chrome.storage.local.get(["settings", "status", "notifications", "assessments", "checkLog"]);
+  const data = await chrome.storage.local.get(["settings", "status", "notifications", "assessments", "checkLog", "unseenNotificationIds"]);
   const settings = publicSettings(data.settings || {});
   const hasConsent = settings.privacyConsent;
   return {
@@ -901,6 +894,7 @@ async function getState() {
     status: hasConsent ? data.status || null : null,
     notifications: hasConsent && Array.isArray(data.notifications) ? data.notifications : [],
     assessments: hasConsent && Array.isArray(data.assessments) ? data.assessments : [],
+    unseenNotificationIds: hasConsent ? normalizeUnseenNotificationIds(data.unseenNotificationIds) : [],
     checkLog: hasConsent && Array.isArray(data.checkLog) ? data.checkLog : [],
     authStatus: null
   };

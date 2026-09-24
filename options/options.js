@@ -3,6 +3,7 @@ let activeFilter = "homework";
 let activeSubject = "all";
 let formDirty = false;
 let loadRequestId = 0;
+let localReadInProgress = false;
 
 $("extension-version").textContent = `v${chrome.runtime.getManifest().version}`;
 document.addEventListener("DOMContentLoaded", () => { void initializeDashboard(); });
@@ -17,6 +18,7 @@ $("check-auth").addEventListener("click", checkAuth);
 $("check-now").addEventListener("click", checkNow);
 $("clear-all").addEventListener("click", clearAll);
 $("download-logs").addEventListener("click", downloadLogs);
+$("mark-notifications-read").addEventListener("click", markNotificationsReadLocally);
 document.querySelectorAll(".filter").forEach((button) => button.addEventListener("click", () => {
   activeFilter = button.dataset.filter;
   document.querySelectorAll(".filter").forEach((item) => item.classList.toggle("active", item === button));
@@ -29,7 +31,7 @@ $("subject-filter-buttons").addEventListener("click", (event) => {
   load({ syncSettings: false });
 });
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.status || changes.notifications || changes.assessments || changes.checkLog)) {
+  if (!localReadInProgress && area === "local" && (changes.status || changes.notifications || changes.assessments || changes.checkLog || changes.unseenNotificationIds)) {
     load({ syncSettings: false });
   }
 });
@@ -43,7 +45,7 @@ async function load({ syncSettings = false } = {}) {
   const response = await chrome.runtime.sendMessage({ type: "get-state" });
   if (requestId !== loadRequestId) return;
   if (!response?.ok) return setOperationStatus("Не вдалося завантажити стан.");
-  const { settings, notifications, assessments, checkLog } = response.state;
+  const { settings, notifications, assessments, checkLog, unseenNotificationIds } = response.state;
   setDashboardButtonsEnabled(settings.privacyConsent === true);
   if (!settings.privacyConsent || !settings.email || !settings.hasPassword) $("settings-details").open = true;
   if (syncSettings && !formDirty) {
@@ -54,9 +56,8 @@ async function load({ syncSettings = false } = {}) {
     passwordInput.placeholder = settings.hasPassword ? "Пароль уже збережено" : "";
     $("intervalMinutes").value = settings.intervalMinutes || 30;
   }
-  renderNotifications(notifications || [], assessments || []);
+  renderNotifications(notifications || [], assessments || [], unseenNotificationIds || []);
   renderLog(checkLog || []);
-  if (settings.privacyConsent) void markNotificationsSeen();
   return response.state;
 }
 
@@ -70,7 +71,6 @@ async function initializeDashboard() {
     // The saved history remains visible if the service worker is restarting.
   } finally {
     await load({ syncSettings: false });
-    await markNotificationsSeen();
   }
 }
 
@@ -81,7 +81,7 @@ function showPrivacyDialog() {
 }
 
 function setDashboardButtonsEnabled(enabled) {
-  document.querySelectorAll("main button:not(#privacy-accept):not(#privacy-decline)").forEach((button) => { button.disabled = !enabled; });
+  document.querySelectorAll("main button:not(#privacy-accept):not(#privacy-decline):not(#mark-notifications-read)").forEach((button) => { button.disabled = !enabled; });
 }
 
 function declinePrivacyConsent(event) {
@@ -116,17 +116,28 @@ function setPrivacyConsentError(visible) {
   $("privacy-consent-error").hidden = !visible;
 }
 
-async function markNotificationsSeen() {
+async function markNotificationsReadLocally() {
+  if ($("mark-notifications-read").disabled) return;
+  localReadInProgress = true;
+  document.querySelectorAll(".notification-new-dot").forEach((dot) => dot.classList.add("is-clearing"));
+  hideFilterCount(activeFilter);
+  renderLocalReadButton(false);
   try {
-    await chrome.runtime.sendMessage({ type: "mark-notifications-seen" });
-  } catch (_error) {
-    // The dashboard remains usable if the service worker is restarting.
+    const response = await chrome.runtime.sendMessage({ type: "mark-notifications-read-locally", category: activeFilter });
+    if (!response?.ok) throw new Error(response?.error || "розширення не відповіло");
+    await new Promise((resolve) => setTimeout(resolve, 190));
+    await load({ syncSettings: false });
+  } catch (error) {
+    setOperationError(`Не вдалося позначити сповіщення прочитаними: ${error instanceof Error ? error.message : String(error)}`);
+    await load({ syncSettings: false });
+  } finally {
+    localReadInProgress = false;
   }
 }
 
 async function save(event) {
   event.preventDefault();
-  if (!$("settings-form").reportValidity()) return;
+  if (!validateSettingsForm()) return;
   setOperationStatus("Зберігаємо налаштування…", true);
   if (!await saveCurrentSettings()) return;
   await load({ syncSettings: true });
@@ -134,7 +145,7 @@ async function save(event) {
 }
 
 async function checkAuth() {
-  if (!$("settings-form").reportValidity()) return;
+  if (!validateSettingsForm()) return;
   setOperationStatus("Зберігаємо налаштування…", true);
   if (!await saveCurrentSettings()) return;
   setOperationStatus("Перевіряємо авторизацію…", true);
@@ -146,7 +157,7 @@ async function checkAuth() {
 }
 
 async function checkNow() {
-  if (!$("settings-form").reportValidity()) return;
+  if (!validateSettingsForm()) return;
   setOperationStatus("Зберігаємо налаштування…", true);
   if (!await saveCurrentSettings()) return;
   setOperationStatus("Перевіряємо HUMAN…", true);
@@ -252,12 +263,39 @@ function fileTimestamp(date) {
 }
 
 function readForm() { return { email: $("email").value, password: $("password").value, intervalMinutes: $("intervalMinutes").value }; }
+function validateSettingsForm() {
+  const emailInput = $("email");
+  const passwordInput = $("password");
+  const intervalInput = $("intervalMinutes");
+  if (!emailInput.validity.valid) {
+    setOperationError("Вкажіть коректний email HUMAN.");
+    emailInput.focus();
+    return false;
+  }
+  if (passwordInput.required && !passwordInput.value) {
+    setOperationError("Вкажіть пароль HUMAN.");
+    passwordInput.focus();
+    return false;
+  }
+  if (!intervalInput.validity.valid) {
+    setOperationError("Інтервал має бути цілим числом від 5 до 1440 хв.");
+    intervalInput.focus();
+    return false;
+  }
+  return true;
+}
 function setOperationStatus(text, loading = false, success = false, error = false) { const element = $("operation-status"); element.textContent = text; element.classList.toggle("loading", loading); element.classList.toggle("success", success); element.classList.toggle("error", error); }
 function setOperationError(text) { setOperationStatus(text, false, false, true); }
-function renderNotifications(notifications, assessments) {
+function renderNotifications(notifications, assessments, unseenNotificationIds) {
   const isGrades = activeFilter === "grades";
+  const unseenIds = new Set(unseenNotificationIds.map((id) => String(id)));
   const subjectPalette = buildSubjectPalette([...notifications, ...assessments]);
   const categoryNotifications = isGrades ? assessments : notifications.filter(isHomeworkNotification);
+  const homeworkNewCount = notifications.filter((item) => isHomeworkNotification(item) && unseenIds.has(String(item.id))).length;
+  const gradeNewCount = notifications.filter((item) => isGradeNotification(item) && unseenIds.has(String(item.id))).length;
+  renderFilterCount("homework", homeworkNewCount);
+  renderFilterCount("grades", gradeNewCount);
+  renderLocalReadButton(isGrades ? gradeNewCount > 0 : homeworkNewCount > 0);
   const allSubjects = [...subjectPalette.keys()];
   document.querySelector(".notifications-table-wrap").classList.toggle("grades-table", isGrades);
   $("notifications-head").innerHTML = isGrades
@@ -294,11 +332,46 @@ function renderNotifications(notifications, assessments) {
       ? `<td class="home-task-action">${homeTaskUrlValue ? `<button type="button" class="home-task-open" data-home-task-url="${escapeHtml(homeTaskUrlValue)}" aria-label="Відкрити домашнє завдання в HUMAN" title="Відкрити в HUMAN">${homeTaskOpenIcon()}</button>` : "—"}</td>`
       : "";
     const number = visibleRows.length - index;
-    const cells = `<td class="notification-number">${number}</td><td class="date-cell">${formatDate(item.createdAt)}</td><td>${escapeHtml(courseName(data))}</td><td>${title}</td>`;
+    const isNew = isGrades ? unseenIds.has(String(data.notificationId || "")) : unseenIds.has(String(item.id));
+    const newDot = isNew
+      ? '<span class="notification-new-dot" aria-label="Нове сповіщення" title="Нове сповіщення"></span>'
+      : '<span class="notification-new-dot is-placeholder" aria-hidden="true"></span>';
+    const cells = `<td class="notification-number"><span class="notification-number-content"><span>${number}</span>${newDot}</span></td><td class="date-cell">${formatDate(item.createdAt)}</td><td>${escapeHtml(courseName(data))}</td><td>${title}</td>`;
     return `<tr class="${rowClass}${dividerClass}"${rowStyle}>${cells}${isGrades ? `<td class="grade-cell"><span class="${gradeClass(data)}">${escapeHtml(gradeValue(data))}</span></td>` : actionCell}</tr>`;
   }).join("");
   $("notifications-table").innerHTML = rows || '<tr><td colspan="5">Даних ще немає.</td></tr>';
 }
+function renderFilterCount(filter, count) {
+  const button = document.querySelector(`.filter[data-filter="${filter}"]`);
+  const badge = button.querySelector(".filter-count");
+  if (count <= 0) {
+    hideFilterCount(filter);
+    return;
+  }
+  if (badge) {
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.classList.remove("is-clearing");
+    return;
+  }
+  button.insertAdjacentHTML("beforeend", `<span class="filter-count">${escapeHtml(count > 99 ? "99+" : String(count))}</span>`);
+}
+function hideFilterCount(filter) {
+  const badge = document.querySelector(`.filter[data-filter="${filter}"] .filter-count`);
+  if (!badge || badge.classList.contains("is-clearing")) return;
+  badge.classList.add("is-clearing");
+  window.setTimeout(() => {
+    if (badge.classList.contains("is-clearing")) badge.remove();
+  }, 190);
+}
+function renderLocalReadButton(hasNewNotifications) {
+  const button = $("mark-notifications-read");
+  button.disabled = !hasNewNotifications;
+  button.innerHTML = hasNewNotifications ? eyeOpenIcon() : eyeClosedIcon();
+  button.setAttribute("aria-label", hasNewNotifications ? "Позначити всі нові сповіщення прочитаними локально" : "Нових сповіщень немає");
+  button.title = hasNewNotifications ? "Позначити всі нові прочитаними" : "Нових сповіщень немає";
+}
+function eyeOpenIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>'; }
+function eyeClosedIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 6.2A10.9 10.9 0 0 1 12 6c6.1 0 9.5 6 9.5 6a17.4 17.4 0 0 1-3.2 3.8M6.1 6.2A17.2 17.2 0 0 0 2.5 12S5.9 18 12 18c1.4 0 2.6-.3 3.7-.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>'; }
 function renderLog(checkLog) {
   const rows = checkLog.slice(0, 100).map((item) => {
     const count = item.newCount == null ? "—" : escapeHtml(String(item.newCount));
@@ -309,6 +382,9 @@ function renderLog(checkLog) {
 }
 function isHomeworkNotification(item) {
   return String(item?.type || "").toLowerCase().startsWith("home_task_");
+}
+function isGradeNotification(item) {
+  return /^grade_(home|lesson)_task$/i.test(String(item?.type || ""));
 }
 function displaySubjectName(value) {
   return value === "Математика (Алгебра і початки аналізу та геометрія)" ? "Математика" : value;

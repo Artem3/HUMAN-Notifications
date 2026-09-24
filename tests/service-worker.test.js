@@ -22,9 +22,7 @@ function loadWorker() {
     action: {
       onClicked: {
         addListener(listener) { storage.actionClickListener = listener; }
-      },
-      async setBadgeBackgroundColor({ color }) { storage.badgeBackgroundColor = color; },
-      async setBadgeText({ text }) { storage.badgeText = text; }
+      }
     },
     alarms: {
       onAlarm: { addListener() {} },
@@ -78,25 +76,35 @@ test("clicking the toolbar icon opens the main options page", async () => {
   assert.equal(storage.optionsPageOpened, true);
 });
 
-test("badge stores the accumulated number of new notifications and caps its text", async () => {
+test("the explicit local action clears ids only in the selected category", async () => {
   const { context, storage } = loadWorker();
-  await vm.runInContext("incrementUnseenCount(3)", context);
-  assert.equal(storage.unseenCount, 3);
-  assert.equal(storage.badgeBackgroundColor, "#D93025");
-  assert.equal(storage.badgeText, "3");
-  await vm.runInContext("incrementUnseenCount(98)", context);
-  assert.equal(storage.unseenCount, 101);
-  assert.equal(storage.badgeText, "99+");
+  storage.notifications = [
+    { id: "a", type: "home_task_created" },
+    { id: "b", type: "grade_home_task" }
+  ];
+  storage.unseenNotificationIds = ["a", "b", "a"];
+  await vm.runInContext('markNotificationsReadLocally("homework")', context);
+  assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), ["b"]);
+  await vm.runInContext('markNotificationsReadLocally("grades")', context);
+  assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), []);
 });
 
-test("opening the dashboard clears the local new-notification badge", async () => {
-  const { context, storage } = loadWorker();
-  storage.unseenCount = 7;
-  await vm.runInContext("restoreBadge()", context);
-  assert.equal(storage.badgeText, "7");
-  await vm.runInContext("markNotificationsSeen()", context);
-  assert.equal(storage.unseenCount, 0);
-  assert.equal(storage.badgeText, "");
+test("dashboard only clears local new marks through its explicit eye button", () => {
+  assert.match(optionsHtml, /id="mark-notifications-read"/);
+  assert.match(optionsSource, /type: "mark-notifications-read-locally", category: activeFilter/);
+  assert.doesNotMatch(optionsSource, /mark-notifications-seen/);
+  const dashboardSource = optionsSource.slice(optionsSource.indexOf("async function initializeDashboard"), optionsSource.indexOf("function showPrivacyDialog"));
+  assert.doesNotMatch(dashboardSource, /markNotificationsReadLocally/);
+  assert.match(optionsSource, /renderFilterCount\("homework", homeworkNewCount\)/);
+  assert.match(optionsSource, /renderFilterCount\("grades", gradeNewCount\)/);
+  assert.match(optionsSource, /notification-new-dot/);
+  assert.match(optionsSource, /function isGradeNotification\(item\)/);
+  assert.match(optionsSource, /not\(#mark-notifications-read\)/);
+  assert.match(optionsSource, /function validateSettingsForm\(\)/);
+  assert.match(optionsSource, /Інтервал має бути цілим числом від 5 до 1440 хв\./);
+  assert.doesNotMatch(optionsHtml, /interval-input-shell/);
+  assert.match(optionsCss, /\.filter-count \{ position: absolute;/);
+  assert.match(optionsCss, /\.notification-new-dot\.is-clearing/);
 });
 
 test("opening the dashboard requests an immediate refresh when credentials are saved", () => {
@@ -385,6 +393,7 @@ test("grade notifications move their exact assessment match to the notification 
   assert.equal(items[0].createdAt, "2026-09-22 21:34:58");
   assert.equal(items[0].data.assessmentCreatedAt, "2026-09-07T12:30:00.000Z");
   assert.equal(items[0].data.notificationCreatedAt, "2026-09-22 21:34:58");
+  assert.equal(items[0].data.notificationId, "499339884");
   assert.equal(items[1].createdAt, "2026-09-22T09:30:00.000Z");
   assert.deepEqual(merge.diagnostics, {
     gradeNotificationCount: 3,
@@ -489,7 +498,7 @@ test("a full check stores notifications and the separate complete grade source",
   const { context, storage } = loadWorker();
   storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
   storage.assessments = Array.from({ length: 3264 }, (_, index) => ({ id: `old:${index}` }));
-  let notificationBatch = [{ id: 1, uid: "notification", created_at: "2026-09-20T08:00:00Z", data: {} }];
+  let notificationBatch = [{ id: 1, uid: "home_task_created", created_at: "2026-09-20T08:00:00Z", data: {} }];
   context.fetch = async (url) => {
     const value = String(url);
     let data;
@@ -524,15 +533,14 @@ test("a full check stores notifications and the separate complete grade source",
   assert.match(storage.checkLog[0].checkId, /^check-/);
   assert.match(storage.checkLog[0].detail, /^Сповіщення: 1\/1\. Оцінки: 2; предметів: 2\. Нові оцінки: 0\/0;/);
   assert.doesNotMatch(JSON.stringify(storage.checkLog), /secret-password/);
-  assert.equal(Object.hasOwn(storage, "unseenCount"), false, "the first sync establishes a baseline");
+  assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), [], "the first sync establishes a baseline");
 
   notificationBatch = [
-    { id: 2, uid: "notification", created_at: "2026-09-20T09:00:00Z", data: {} },
+    { id: 2, uid: "home_task_created", created_at: "2026-09-20T09:00:00Z", data: {} },
     ...notificationBatch
   ];
   await vm.runInContext('runCheck("test")', context);
-  assert.equal(storage.unseenCount, 1);
-  assert.equal(storage.badgeText, "1");
+  assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), ["2"]);
 });
 
 test("appendCheckLog keeps only the newest 100 records", async () => {

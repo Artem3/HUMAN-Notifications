@@ -21,7 +21,7 @@
       <summary>Налаштування</summary>
       <span id="extension-version" class="extension-version" aria-hidden="true"></span>
       <div class="settings-content">
-        <form id="settings-form">
+        <form id="settings-form" novalidate>
           <div class="settings-grid">
             <div class="settings-fields">
               <label>Email HUMAN<input id="email" type="email" autocomplete="username" required></label>
@@ -65,6 +65,7 @@
       <div class="category-filters" role="group" aria-label="Тип сповіщень">
         <button type="button" class="filter active" data-filter="homework">Домашні завдання</button>
         <button type="button" class="filter" data-filter="grades">Оцінки</button>
+        <button type="button" id="mark-notifications-read" class="mark-notifications-read" aria-label="Позначити всі нові сповіщення прочитаними локально" title="Позначити всі нові прочитаними" disabled></button>
       </div>
       <div id="subject-filter-buttons" class="subject-filters" role="group" aria-label="Фільтр за предметом"></div>
       <div class="table-wrap notifications-table-wrap">
