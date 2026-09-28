@@ -4,6 +4,10 @@ let activeSubject = "all";
 let formDirty = false;
 let loadRequestId = 0;
 let localReadInProgress = false;
+let faviconRequestId = 0;
+let faviconImagePromise = null;
+const NEW_MARKER_TRANSITION_MS = 300;
+const renderedSubjectBadgeKeysByCategory = new Map();
 
 $("extension-version").textContent = `v${chrome.runtime.getManifest().version}`;
 document.addEventListener("DOMContentLoaded", () => { void initializeDashboard(); });
@@ -57,8 +61,57 @@ async function load({ syncSettings = false } = {}) {
     $("intervalMinutes").value = settings.intervalMinutes || 30;
   }
   renderNotifications(notifications || [], assessments || [], unseenNotificationIds || []);
+  void renderTabFavicon(unseenNotificationIds || []);
   renderLog(checkLog || []);
   return response.state;
+}
+
+async function renderTabFavicon(unseenNotificationIds) {
+  const favicon = $("page-favicon");
+  if (!favicon) return;
+  const count = new Set((Array.isArray(unseenNotificationIds) ? unseenNotificationIds : []).map((id) => String(id).trim()).filter(Boolean)).size;
+  const requestId = ++faviconRequestId;
+  if (count === 0) {
+    favicon.href = "../icons/human-icon-v4-32.png";
+    return;
+  }
+  try {
+    const image = await loadFaviconImage();
+    if (requestId !== faviconRequestId) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.drawImage(image, 0, 0, 64, 64);
+    context.fillStyle = "#d93025";
+    context.beginPath();
+    context.arc(49, 15, 16, 0, Math.PI * 2);
+    context.fill();
+    context.lineWidth = 3;
+    context.strokeStyle = "#ffffff";
+    context.stroke();
+    const badgeText = count > 9 ? "9+" : String(count);
+    context.fillStyle = "#ffffff";
+    context.font = badgeText.length > 1 ? "800 18px system-ui, sans-serif" : "800 24px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(badgeText, 49, 15.5);
+    favicon.href = canvas.toDataURL("image/png");
+  } catch (_error) {
+    if (requestId === faviconRequestId) favicon.href = "../icons/human-icon-v4-32.png";
+  }
+}
+
+function loadFaviconImage() {
+  if (faviconImagePromise) return faviconImagePromise;
+  faviconImagePromise = new Promise((resolve, reject) => {
+    const image = new Image();
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener("error", reject, { once: true });
+    image.src = "../icons/human-icon-v4-32.png";
+  });
+  return faviconImagePromise;
 }
 
 async function initializeDashboard() {
@@ -119,13 +172,14 @@ function setPrivacyConsentError(visible) {
 async function markNotificationsReadLocally() {
   if ($("mark-notifications-read").disabled) return;
   localReadInProgress = true;
-  document.querySelectorAll(".notification-new-dot").forEach((dot) => dot.classList.add("is-clearing"));
+  document.querySelectorAll(".new-notification-row").forEach((row) => row.classList.add("is-clearing"));
+  document.querySelectorAll(".subject-filter-count").forEach((badge) => badge.classList.add("is-clearing"));
   hideFilterCount(activeFilter);
   renderLocalReadButton(false);
   try {
     const response = await chrome.runtime.sendMessage({ type: "mark-notifications-read-locally", category: activeFilter });
     if (!response?.ok) throw new Error(response?.error || "розширення не відповіло");
-    await new Promise((resolve) => setTimeout(resolve, 190));
+    await new Promise((resolve) => setTimeout(resolve, NEW_MARKER_TRANSITION_MS + 10));
     await load({ syncSettings: false });
   } catch (error) {
     setOperationError(`Не вдалося позначити сповіщення прочитаними: ${error instanceof Error ? error.message : String(error)}`);
@@ -297,6 +351,11 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
   renderFilterCount("grades", gradeNewCount);
   renderLocalReadButton(isGrades ? gradeNewCount > 0 : homeworkNewCount > 0);
   const allSubjects = [...subjectPalette.keys()];
+  const newCountBySubject = countNewNotificationsBySubject(categoryNotifications, unseenIds, isGrades);
+  const previousSubjectBadgeKeys = renderedSubjectBadgeKeysByCategory.get(activeFilter) || new Set();
+  const subjectBadgeKeys = new Set();
+  $("notifications-panel").classList.toggle("grades-panel", isGrades);
+  $("category-filters").classList.toggle("grades-category", isGrades);
   document.querySelector(".notifications-table-wrap").classList.toggle("grades-table", isGrades);
   $("notifications-head").innerHTML = isGrades
     ? "<tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th><th>Оцінка</th></tr>"
@@ -308,10 +367,16 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
     ...allSubjects.map((subject) => {
       const colors = subjectPalette.get(subject);
       const unavailable = !availableSubjects.has(subject);
+      const newCount = newCountBySubject.get(subject) || 0;
       const unavailableAttributes = unavailable ? ' disabled aria-disabled="true" title="У цій вкладці ще немає даних із предмета"' : "";
-      return `<button type="button" class="subject-filter${visibleSubject === subject ? " active" : ""}" style="${subjectButtonStyle(colors)}" data-subject="${escapeHtml(subject)}"${unavailableAttributes}>${escapeHtml(subject)}</button>`;
+      const badgeKey = `${subject}\u0000${newCount}`;
+      const isAppearing = newCount > 0 && !previousSubjectBadgeKeys.has(badgeKey);
+      if (newCount > 0) subjectBadgeKeys.add(badgeKey);
+      const newBadge = newCount > 0 ? `<span class="subject-filter-count${isAppearing ? " is-appearing" : ""}" aria-label="${escapeHtml(`Нових сповіщень: ${newCount}`)}">${escapeHtml(newCount > 99 ? "99+" : String(newCount))}</span>` : "";
+      return `<button type="button" class="subject-filter${visibleSubject === subject ? " active" : ""}${newCount > 0 ? " has-new-subject" : ""}" style="${subjectButtonStyle(colors)}" data-subject="${escapeHtml(subject)}"${unavailableAttributes}>${escapeHtml(subject)}${newBadge}</button>`;
     })
   ].join("");
+  renderedSubjectBadgeKeysByCategory.set(activeFilter, subjectBadgeKeys);
   const visible = categoryNotifications.filter((item) => visibleSubject === "all" || subjectName(item.data || {}) === visibleSubject);
   const visibleRows = visible;
   const todayKey = dateKey(new Date());
@@ -323,9 +388,7 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
     const data = item.data || {};
     const subject = subjectName(data);
     const colors = subjectPalette.get(subject);
-    const rowClass = colors ? "subject-row" : "";
     const rowStyle = colors ? ` style="--subject-bg:${colors.background}"` : "";
-    const dividerClass = index === dayDividerIndex ? " day-divider" : "";
     const homeTaskUrlValue = homeTaskUrl(item, isGrades);
     const title = escapeHtml(notificationTitle(data));
     const actionCell = !isGrades
@@ -333,13 +396,24 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
       : "";
     const number = visibleRows.length - index;
     const isNew = isGrades ? unseenIds.has(String(data.notificationId || "")) : unseenIds.has(String(item.id));
-    const newDot = isNew
-      ? '<span class="notification-new-dot" aria-label="Нове сповіщення" title="Нове сповіщення"></span>'
-      : '<span class="notification-new-dot is-placeholder" aria-hidden="true"></span>';
-    const cells = `<td class="notification-number"><span class="notification-number-content"><span>${number}</span>${newDot}</span></td><td class="date-cell">${formatDate(item.createdAt)}</td><td>${escapeHtml(courseName(data))}</td><td>${title}</td>`;
-    return `<tr class="${rowClass}${dividerClass}"${rowStyle}>${cells}${isGrades ? `<td class="grade-cell"><span class="${gradeClass(data)}">${escapeHtml(gradeValue(data))}</span></td>` : actionCell}</tr>`;
+    const rowClasses = [colors ? "subject-row" : "", isNew ? "new-notification-row" : "", index === dayDividerIndex ? "day-divider" : ""].filter(Boolean).join(" ");
+    const cells = `<td class="notification-number"><span class="notification-number-content"><span>${number}</span></span></td><td class="date-cell">${formatDate(item.createdAt)}</td><td class="subject-cell">${escapeHtml(courseName(data))}</td><td>${title}</td>`;
+    return `<tr class="${rowClasses}"${rowStyle}>${cells}${isGrades ? `<td class="grade-cell"><span class="${gradeClass(data)}">${escapeHtml(gradeValue(data))}</span></td>` : actionCell}</tr>`;
   }).join("");
   $("notifications-table").innerHTML = rows || '<tr><td colspan="5">Даних ще немає.</td></tr>';
+  queueBadgeReveal();
+}
+function countNewNotificationsBySubject(items, unseenIds, isGrades) {
+  const counts = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const data = item?.data || {};
+    const notificationId = isGrades ? data.notificationId : item?.id;
+    if (!unseenIds.has(String(notificationId || ""))) continue;
+    const subject = subjectName(data);
+    if (subject === "—") continue;
+    counts.set(subject, (counts.get(subject) || 0) + 1);
+  }
+  return counts;
 }
 function renderFilterCount(filter, count) {
   const button = document.querySelector(`.filter[data-filter="${filter}"]`);
@@ -353,7 +427,14 @@ function renderFilterCount(filter, count) {
     badge.classList.remove("is-clearing");
     return;
   }
-  button.insertAdjacentHTML("beforeend", `<span class="filter-count">${escapeHtml(count > 99 ? "99+" : String(count))}</span>`);
+  button.insertAdjacentHTML("beforeend", `<span class="filter-count is-appearing">${escapeHtml(count > 99 ? "99+" : String(count))}</span>`);
+}
+function queueBadgeReveal() {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      document.querySelectorAll(".filter-count.is-appearing, .subject-filter-count.is-appearing").forEach((badge) => badge.classList.remove("is-appearing"));
+    });
+  });
 }
 function hideFilterCount(filter) {
   const badge = document.querySelector(`.filter[data-filter="${filter}"] .filter-count`);
@@ -361,7 +442,7 @@ function hideFilterCount(filter) {
   badge.classList.add("is-clearing");
   window.setTimeout(() => {
     if (badge.classList.contains("is-clearing")) badge.remove();
-  }, 190);
+  }, NEW_MARKER_TRANSITION_MS + 10);
 }
 function renderLocalReadButton(hasNewNotifications) {
   const button = $("mark-notifications-read");

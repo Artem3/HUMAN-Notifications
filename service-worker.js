@@ -4,6 +4,9 @@ const REQUEST_TIMEOUT_MS = 30000;
 const MAX_CHECK_LOG = 100;
 const ASSESSMENT_DETAIL_LIMIT = 100;
 const MAX_NOTIFICATION_STORAGE_BYTES = 7 * 1024 * 1024;
+const MAX_ACTION_BADGE_COUNT = 99;
+const ACTION_BADGE_BACKGROUND_COLOR = "#D93025";
+const ACTION_BADGE_TEXT_COLOR = "#FFFFFF";
 const DEFAULTS = {
   email: "",
   password: "",
@@ -12,6 +15,7 @@ const DEFAULTS = {
 };
 const storageAccessReady = restrictStorageAccess();
 void ensureAlarmExists().catch((error) => console.error("Could not ensure HUMAN alarm:", safeError(error)));
+void restoreNewNotificationBadge().catch((error) => console.error("Could not restore HUMAN notification badge:", safeError(error)));
 
 async function restrictStorageAccess() {
   try {
@@ -228,6 +232,7 @@ async function checkNotifications(trigger) {
     ? mergeUnseenNotificationIds(old.unseenNotificationIds, newItems.filter(isTrackableNotification).map((item) => item.id), merged)
     : [];
   await chrome.storage.local.set({ notifications: merged, unseenNotificationIds });
+  await updateNewNotificationBadge(unseenNotificationIds);
   await chrome.storage.local.remove(["notificationIds"]);
 
   const details = [`Сповіщення: ${notifications.length}/${merged.length}.`];
@@ -321,6 +326,7 @@ async function clearAllInternal() {
   const privacyConsent = data.settings?.privacyConsent === true;
   await chrome.storage.local.clear();
   await chrome.storage.local.set({ settings: { ...DEFAULTS, email, password, privacyConsent } });
+  await updateNewNotificationBadge([]);
   await scheduleAlarm();
 }
 
@@ -334,6 +340,22 @@ async function markNotificationsReadLocally(category) {
     return selectedCategory === "grades" ? !isGradeNotification(notification) : !isHomeworkNotification(notification);
   });
   await chrome.storage.local.set({ unseenNotificationIds });
+  await updateNewNotificationBadge(unseenNotificationIds);
+}
+
+async function restoreNewNotificationBadge() {
+  await storageAccessReady;
+  const { unseenNotificationIds } = await chrome.storage.local.get(["unseenNotificationIds"]);
+  await updateNewNotificationBadge(unseenNotificationIds);
+}
+
+async function updateNewNotificationBadge(notificationIds) {
+  const count = normalizeUnseenNotificationIds(notificationIds).length;
+  await chrome.action.setBadgeBackgroundColor({ color: ACTION_BADGE_BACKGROUND_COLOR });
+  if (typeof chrome.action.setBadgeTextColor === "function") {
+    await chrome.action.setBadgeTextColor({ color: ACTION_BADGE_TEXT_COLOR });
+  }
+  await chrome.action.setBadgeText({ text: count === 0 ? "" : count > MAX_ACTION_BADGE_COUNT ? `${MAX_ACTION_BADGE_COUNT}+` : String(count) });
 }
 
 function normalizeUnseenNotificationIds(value) {

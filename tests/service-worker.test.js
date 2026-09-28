@@ -22,7 +22,10 @@ function loadWorker() {
     action: {
       onClicked: {
         addListener(listener) { storage.actionClickListener = listener; }
-      }
+      },
+      async setBadgeBackgroundColor({ color }) { storage.badgeBackgroundColor = color; },
+      async setBadgeTextColor({ color }) { storage.badgeTextColor = color; },
+      async setBadgeText({ text }) { storage.badgeText = text; }
     },
     alarms: {
       onAlarm: { addListener() {} },
@@ -85,26 +88,79 @@ test("the explicit local action clears ids only in the selected category", async
   storage.unseenNotificationIds = ["a", "b", "a"];
   await vm.runInContext('markNotificationsReadLocally("homework")', context);
   assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), ["b"]);
+  assert.equal(storage.badgeText, "1");
   await vm.runInContext('markNotificationsReadLocally("grades")', context);
   assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), []);
+  assert.equal(storage.badgeText, "");
+});
+
+test("toolbar badge shows the total local new-notification count", async () => {
+  const { context, storage } = loadWorker();
+  await vm.runInContext('updateNewNotificationBadge(["homework", "grade", "homework"])', context);
+  assert.equal(storage.badgeBackgroundColor, "#D93025");
+  assert.equal(storage.badgeTextColor, "#FFFFFF");
+  assert.equal(storage.badgeText, "2");
+  await vm.runInContext('updateNewNotificationBadge(Array.from({ length: 100 }, (_, index) => String(index)))', context);
+  assert.equal(storage.badgeText, "99+");
+});
+
+test("subject-filter badges count only new records in the active category", () => {
+  const context = vm.createContext({ Map });
+  const subjectHelpers = optionsSource.slice(optionsSource.indexOf("function displaySubjectName"), optionsSource.indexOf("const SUBJECT_COLORS"));
+  const countHelper = optionsSource.slice(optionsSource.indexOf("function countNewNotificationsBySubject"), optionsSource.indexOf("function renderFilterCount"));
+  vm.runInContext(`${subjectHelpers}\n${countHelper}`, context);
+  const homeworkCounts = vm.runInContext(`JSON.stringify(Array.from(countNewNotificationsBySubject([
+    { id: "h1", data: { subjectName: "Географія" } },
+    { id: "h2", data: { subjectName: "Географія" } },
+    { id: "h3", data: { subjectName: "Фізика" } }
+  ], new Set(["h1", "h3"]), false).entries()))`, context);
+  const gradeCounts = vm.runInContext(`JSON.stringify(Array.from(countNewNotificationsBySubject([
+    { data: { notificationId: "g1", subjectName: "Біологія і екологія" } },
+    { data: { notificationId: "g2", subjectName: "Інформатика" } },
+    { data: { notificationId: "g3", subjectName: "Фізика" } }
+  ], new Set(["g1", "g2"]), true).entries()))`, context);
+  assert.equal(homeworkCounts, '[["Географія",1],["Фізика",1]]');
+  assert.equal(gradeCounts, '[["Біологія і екологія",1],["Інформатика",1]]');
 });
 
 test("dashboard only clears local new marks through its explicit eye button", () => {
   assert.match(optionsHtml, /id="mark-notifications-read"/);
+  assert.match(optionsHtml, /id="page-favicon"/);
+  assert.match(optionsHtml, /id="notifications-panel"/);
+  assert.match(optionsHtml, /id="category-filters"/);
   assert.match(optionsSource, /type: "mark-notifications-read-locally", category: activeFilter/);
   assert.doesNotMatch(optionsSource, /mark-notifications-seen/);
   const dashboardSource = optionsSource.slice(optionsSource.indexOf("async function initializeDashboard"), optionsSource.indexOf("function showPrivacyDialog"));
   assert.doesNotMatch(dashboardSource, /markNotificationsReadLocally/);
   assert.match(optionsSource, /renderFilterCount\("homework", homeworkNewCount\)/);
   assert.match(optionsSource, /renderFilterCount\("grades", gradeNewCount\)/);
-  assert.match(optionsSource, /notification-new-dot/);
+  assert.match(optionsSource, /void renderTabFavicon\(unseenNotificationIds \|\| \[\]\)/);
+  assert.match(optionsSource, /context\.arc\(49, 15, 16/);
+  assert.match(optionsSource, /new-notification-row/);
+  assert.match(optionsSource, /countNewNotificationsBySubject\(categoryNotifications, unseenIds, isGrades\)/);
+  assert.match(optionsSource, /subject-filter-count/);
+  assert.match(optionsSource, /const renderedSubjectBadgeKeysByCategory = new Map\(\)/);
+  assert.match(optionsSource, /function queueBadgeReveal\(\)/);
+  assert.match(optionsSource, /const NEW_MARKER_TRANSITION_MS = 300/);
   assert.match(optionsSource, /function isGradeNotification\(item\)/);
   assert.match(optionsSource, /not\(#mark-notifications-read\)/);
   assert.match(optionsSource, /function validateSettingsForm\(\)/);
   assert.match(optionsSource, /Інтервал має бути цілим числом від 5 до 1440 хв\./);
   assert.doesNotMatch(optionsHtml, /interval-input-shell/);
   assert.match(optionsCss, /\.filter-count \{ position: absolute;/);
-  assert.match(optionsCss, /\.notification-new-dot\.is-clearing/);
+  assert.match(optionsCss, /min-width: 22px/);
+  assert.match(optionsCss, /background: #2d6fc4; color: #ffffff/);
+  assert.match(optionsCss, /button\.filter \{[^}]*border: 1px solid #b8cdd8/);
+  assert.match(optionsCss, /button\.filter\[data-filter="grades"\] \{[^}]*background: #efecf5/);
+  assert.match(optionsCss, /\.notifications-panel \{ padding: 13px 8px 12px;[^}]*background: #d8e8f1/);
+  assert.match(optionsCss, /\.notifications-table-wrap \{ height: 460px; overflow: auto; border-top: 2px solid #ffffff;/);
+  assert.match(optionsCss, /th:nth-child\(3\), \.notifications-table td:nth-child\(3\) \{ width: 200px/);
+  assert.match(optionsCss, /width: 6px; content: ""; background: #2d6fc4/);
+  assert.match(optionsCss, /transition: opacity \.3s ease, transform \.3s ease/);
+  assert.match(optionsCss, /\.subject-filter-count \{ position: absolute;[^}]*background: #2d6fc4/);
+  assert.doesNotMatch(optionsCss, /has-new-subject \{ padding-right/);
+  assert.match(optionsCss, /\.subject-filter-count\.is-clearing, \.subject-filter-count\.is-appearing, \.filter-count\.is-appearing/);
+  assert.match(optionsCss, /\.new-notification-row\.is-clearing[^}]*opacity: 0; transform: scaleY\(\.2\)/);
 });
 
 test("opening the dashboard requests an immediate refresh when credentials are saved", () => {

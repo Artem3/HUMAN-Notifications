@@ -4,8 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HUMAN Notifications</title>
-  <link rel="icon" type="image/png" sizes="16x16" href="../icons/human-icon-v4-16.png">
-  <link rel="icon" type="image/png" sizes="32x32" href="../icons/human-icon-v4-32.png">
+  <link id="page-favicon" rel="icon" type="image/png" href="../icons/human-icon-v4-32.png">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
@@ -62,17 +61,19 @@
     </details>
     <section class="notifications-section" aria-labelledby="notifications-heading">
       <h2 id="notifications-heading">Останні сповіщення</h2>
-      <div class="category-filters" role="group" aria-label="Тип сповіщень">
+      <div id="category-filters" class="category-filters" role="group" aria-label="Тип сповіщень">
         <button type="button" class="filter active" data-filter="homework">Домашні завдання</button>
         <button type="button" class="filter" data-filter="grades">Оцінки</button>
         <button type="button" id="mark-notifications-read" class="mark-notifications-read" aria-label="Позначити всі нові сповіщення прочитаними локально" title="Позначити всі нові прочитаними" disabled></button>
       </div>
-      <div id="subject-filter-buttons" class="subject-filters" role="group" aria-label="Фільтр за предметом"></div>
-      <div class="table-wrap notifications-table-wrap">
-        <table class="notifications-table">
-          <thead id="notifications-head"><tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th></tr></thead>
-          <tbody id="notifications-table"><tr><td colspan="4">Даних ще немає.</td></tr></tbody>
-        </table>
+      <div id="notifications-panel" class="notifications-panel">
+        <div id="subject-filter-buttons" class="subject-filters" role="group" aria-label="Фільтр за предметом"></div>
+        <div class="table-wrap notifications-table-wrap">
+          <table class="notifications-table">
+            <thead id="notifications-head"><tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th></tr></thead>
+            <tbody id="notifications-table"><tr><td colspan="4">Даних ще немає.</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </section>
     <dialog id="privacy-dialog" class="privacy-dialog" aria-labelledby="privacy-dialog-title">
