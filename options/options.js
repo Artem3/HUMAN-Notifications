@@ -363,7 +363,7 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
   const availableSubjects = new Set(categoryNotifications.map((item) => subjectName(item.data || {})).filter((value) => value !== "—"));
   const visibleSubject = availableSubjects.has(activeSubject) ? activeSubject : "all";
   $("subject-filter-buttons").innerHTML = [
-    `<button type="button" class="subject-filter all-subject${visibleSubject === "all" ? " active" : ""}" style="background:#edf1f4;color:#52616b;border-color:#b9c5cc" data-subject="all">Усі</button>`,
+    `<button type="button" class="subject-filter all-subject${visibleSubject === "all" ? " active" : ""}" style="background:#edf1f4;color:#52616b;border-color:#b9c5cc" data-subject="all" data-label="Усі"><span class="subject-filter-label">Усі</span></button>`,
     ...allSubjects.map((subject) => {
       const colors = subjectPalette.get(subject);
       const unavailable = !availableSubjects.has(subject);
@@ -373,7 +373,7 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
       const isAppearing = newCount > 0 && !previousSubjectBadgeKeys.has(badgeKey);
       if (newCount > 0) subjectBadgeKeys.add(badgeKey);
       const newBadge = newCount > 0 ? `<span class="subject-filter-count${isAppearing ? " is-appearing" : ""}" aria-label="${escapeHtml(`Нових сповіщень: ${newCount}`)}">${escapeHtml(newCount > 99 ? "99+" : String(newCount))}</span>` : "";
-      return `<button type="button" class="subject-filter${visibleSubject === subject ? " active" : ""}${newCount > 0 ? " has-new-subject" : ""}" style="${subjectButtonStyle(colors)}" data-subject="${escapeHtml(subject)}"${unavailableAttributes}>${escapeHtml(subject)}${newBadge}</button>`;
+      return `<button type="button" class="subject-filter${visibleSubject === subject ? " active" : ""}${newCount > 0 ? " has-new-subject" : ""}" style="${subjectButtonStyle(colors)}" data-subject="${escapeHtml(subject)}" data-label="${escapeHtml(subject)}"${unavailableAttributes}><span class="subject-filter-label">${escapeHtml(subject)}</span>${newBadge}</button>`;
     })
   ].join("");
   renderedSubjectBadgeKeysByCategory.set(activeFilter, subjectBadgeKeys);

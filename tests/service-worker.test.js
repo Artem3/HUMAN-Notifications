@@ -154,10 +154,15 @@ test("dashboard only clears local new marks through its explicit eye button", ()
   assert.match(optionsCss, /button\.filter\[data-filter="grades"\] \{[^}]*background: #efecf5/);
   assert.match(optionsCss, /\.notifications-panel \{ padding: 13px 8px 12px;[^}]*background: #d8e8f1/);
   assert.match(optionsCss, /\.notifications-table-wrap \{ height: 460px; overflow: auto; border-top: 2px solid #ffffff;/);
+  assert.match(optionsCss, /\.notifications-table \{ table-layout: fixed; \}/);
+  assert.match(optionsCss, /th:nth-child\(2\), \.notifications-table td:nth-child\(2\) \{ width: 90px/);
   assert.match(optionsCss, /th:nth-child\(3\), \.notifications-table td:nth-child\(3\) \{ width: 200px/);
+  assert.match(optionsCss, /th:last-child, \.notifications-table \.home-task-action, \.notifications-table \.grade-cell \{ width: 76px/);
   assert.match(optionsCss, /width: 6px; content: ""; background: #2d6fc4/);
   assert.match(optionsCss, /transition: opacity \.3s ease, transform \.3s ease/);
   assert.match(optionsCss, /\.subject-filter-count \{ position: absolute;[^}]*background: #2d6fc4/);
+  assert.match(optionsCss, /button\.subject-filter::before \{ content: attr\(data-label\); visibility: hidden; font-weight: 650;/);
+  assert.match(optionsSource, /data-label="\$\{escapeHtml\(subject\)\}"/);
   assert.doesNotMatch(optionsCss, /has-new-subject \{ padding-right/);
   assert.match(optionsCss, /\.subject-filter-count\.is-clearing, \.subject-filter-count\.is-appearing, \.filter-count\.is-appearing/);
   assert.match(optionsCss, /\.new-notification-row\.is-clearing[^}]*opacity: 0; transform: scaleY\(\.2\)/);

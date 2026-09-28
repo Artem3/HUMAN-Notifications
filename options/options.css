@@ -27,7 +27,9 @@ button.filter[data-filter="grades"]:not(.active):hover { background: #e8e4f0; co
 .mark-notifications-read:disabled { border-color: #c8d3da; background: #f4f7f8; color: #9aa9b2; cursor: default; opacity: .88; }
 .mark-notifications-read:focus-visible { outline: 2px solid #6f9fc2; outline-offset: 2px; }
 .subject-filters { display: flex; flex-wrap: wrap; gap: 6px; min-height: 27px; margin: 0 0 14px; }
-button.subject-filter { position: relative; padding: 5px 10px; background: #edf1f4; color: #52616b; border: 1px solid #b9c5cc; font-size: 13px; }
+button.subject-filter { position: relative; display: inline-grid; padding: 5px 10px; background: #edf1f4; color: #52616b; border: 1px solid #b9c5cc; font-size: 13px; }
+button.subject-filter::before, .subject-filter-label { grid-area: 1 / 1; }
+button.subject-filter::before { content: attr(data-label); visibility: hidden; font-weight: 650; white-space: nowrap; pointer-events: none; }
 .subject-filter-count { position: absolute; top: -11px; right: 1px; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 4px; border: 2px solid #ffffff; border-radius: 999px; background: #2d6fc4; color: #ffffff; font-size: 10px; font-weight: 800; line-height: 14px; text-align: center; box-shadow: 0 1px 3px #1d4f8d66; opacity: 1; transform: scale(1); transition: opacity .3s ease, transform .3s ease; }
 .subject-filter-count.is-clearing, .subject-filter-count.is-appearing, .filter-count.is-appearing { opacity: 0; transform: scale(.2); }
 button.subject-filter.active { box-shadow: inset 0 0 0 2px #ffffffdd, 0 0 0 2px #6f7e88; font-weight: 650; }
@@ -35,6 +37,7 @@ button.subject-filter:disabled { opacity: .48; cursor: default; }
 .table-wrap { overflow-x: auto; border: 1px solid #d9e0e4; border-radius: 8px; background: white; }
 .notifications-table-wrap { height: 460px; overflow: auto; border-top: 2px solid #ffffff; scrollbar-gutter: stable; }
 table { width: 100%; min-width: 680px; border-collapse: collapse; font-size: 14px; }
+.notifications-table { table-layout: fixed; }
 .table-wrap, .table-wrap table, .table-wrap th, .table-wrap td { cursor: default; }
 th, td { padding: 9px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid #edf0f2; }
 th { position: sticky; top: 0; z-index: 1; background: #d8e8f1; color: #465b68; font-weight: 650; white-space: nowrap; box-shadow: 0 2px 0 #b8cdd8; }
@@ -42,7 +45,9 @@ th { position: sticky; top: 0; z-index: 1; background: #d8e8f1; color: #465b68; 
 th:not(:last-child) { border-right: 2px solid #ffffff; }
 .notifications-table .date-cell { white-space: nowrap; line-height: 1.35; }
 .notifications-table th:first-child, .notifications-table td:first-child { width: 30px; max-width: 30px; padding-left: 4px; padding-right: 4px; text-align: center; }
+.notifications-table th:nth-child(2), .notifications-table td:nth-child(2) { width: 90px; box-sizing: border-box; }
 .notifications-table th:nth-child(3), .notifications-table td:nth-child(3) { width: 200px; min-width: 200px; max-width: 200px; box-sizing: border-box; }
+.notifications-table th:last-child, .notifications-table .home-task-action, .notifications-table .grade-cell { width: 76px; box-sizing: border-box; }
 .notifications-table .notification-number { color: #61717c; font-weight: 400; }
 .notification-number-content { display: flex; min-height: 30px; align-items: flex-start; justify-content: center; }
 .notifications-table .grade-value { font-weight: 700; }
@@ -57,7 +62,7 @@ th:not(:last-child) { border-right: 2px solid #ffffff; }
 .notifications-table .new-notification-row > td:first-child::before { left: 0; border-radius: 0; transform-origin: center; }
 .notifications-table .new-notification-row > td:last-child::after { right: 0; border-radius: 0; transform-origin: center; }
 .notifications-table .new-notification-row.is-clearing > td:first-child::before, .notifications-table .new-notification-row.is-clearing > td:last-child::after { opacity: 0; transform: scaleY(.2); }
-.notifications-table .home-task-action { width: 76px; text-align: center; vertical-align: middle; }
+.notifications-table .home-task-action { text-align: center; vertical-align: middle; }
 .notifications-table .home-task-open { display: inline-grid; width: 30px; height: 30px; padding: 0; place-items: center; border: 1px solid #a9bfd0; border-radius: 8px; background: #ffffffb8; color: #3d769c; box-shadow: 0 1px 2px #25313b16; cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease; }
 .notifications-table .home-task-open svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .notifications-table .home-task-open:hover { border-color: #6f9fc2; background: #ffffff; color: #1d5ea9; transform: translateY(-1px); }
