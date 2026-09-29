@@ -6,6 +6,10 @@ let loadRequestId = 0;
 let localReadInProgress = false;
 let faviconRequestId = 0;
 let faviconImagePromise = null;
+let lastSuccessfulCheckAt = null;
+let quickCheckState = "idle";
+let quickCheckConfigured = false;
+let checkAgeTimerId = null;
 const NEW_MARKER_TRANSITION_MS = 300;
 const renderedSubjectBadgeKeysByCategory = new Map();
 
@@ -23,8 +27,10 @@ $("check-now").addEventListener("click", checkNow);
 $("clear-all").addEventListener("click", clearAll);
 $("download-logs").addEventListener("click", downloadLogs);
 $("mark-notifications-read").addEventListener("click", markNotificationsReadLocally);
+$("quick-check").addEventListener("click", quickCheckNow);
 document.querySelectorAll(".filter").forEach((button) => button.addEventListener("click", () => {
   activeFilter = button.dataset.filter;
+  void logUiEvent(activeFilter === "grades" ? "category-grades" : "category-homework");
   document.querySelectorAll(".filter").forEach((item) => item.classList.toggle("active", item === button));
   load({ syncSettings: false });
 }));
@@ -32,6 +38,7 @@ $("subject-filter-buttons").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-subject]");
   if (!button || button.disabled) return;
   activeSubject = button.dataset.subject;
+  void logUiEvent("subject-filter", activeSubject === "all" ? "Предмет: усі." : `Предмет: ${activeSubject}.`);
   load({ syncSettings: false });
 });
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -41,7 +48,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 $("notifications-table").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-home-task-url]");
-  if (button) window.open(button.dataset.homeTaskUrl, "_blank", "noopener,noreferrer");
+  if (button) {
+    void logUiEvent("open-home-task");
+    window.open(button.dataset.homeTaskUrl, "_blank", "noopener,noreferrer");
+  }
 });
 
 async function load({ syncSettings = false } = {}) {
@@ -51,6 +61,7 @@ async function load({ syncSettings = false } = {}) {
   if (!response?.ok) return setOperationStatus("Не вдалося завантажити стан.");
   const { settings, notifications, assessments, checkLog, unseenNotificationIds } = response.state;
   setDashboardButtonsEnabled(settings.privacyConsent === true);
+  renderQuickCheckState(checkLog || [], settings);
   if (!settings.privacyConsent || !settings.email || !settings.hasPassword) $("settings-details").open = true;
   if (syncSettings && !formDirty) {
     $("email").value = settings.email || "";
@@ -64,6 +75,63 @@ async function load({ syncSettings = false } = {}) {
   void renderTabFavicon(unseenNotificationIds || []);
   renderLog(checkLog || []);
   return response.state;
+}
+
+function renderQuickCheckState(checkLog, settings) {
+  quickCheckConfigured = settings?.privacyConsent === true && Boolean(settings.email) && settings.hasPassword === true;
+  const latestSuccessfulCheck = (Array.isArray(checkLog) ? checkLog : []).find((item) => item?.operation === "CHECK" && ["ok", "partial"].includes(item.state) && item.at);
+  const nextSuccessfulCheckAt = latestSuccessfulCheck?.at || null;
+  if (quickCheckState === "error" && nextSuccessfulCheckAt && nextSuccessfulCheckAt !== lastSuccessfulCheckAt) quickCheckState = "idle";
+  lastSuccessfulCheckAt = nextSuccessfulCheckAt;
+  updateQuickCheckDisplay();
+  if (checkAgeTimerId === null) checkAgeTimerId = window.setInterval(updateQuickCheckDisplay, 60_000);
+}
+
+function updateQuickCheckDisplay() {
+  const button = $("quick-check");
+  const label = $("last-check-age");
+  button.disabled = !quickCheckConfigured || quickCheckState === "checking";
+  button.textContent = quickCheckState === "checking" ? "Перевіряємо…" : "Перевірити зараз";
+  button.setAttribute("aria-busy", quickCheckState === "checking" ? "true" : "false");
+  if (quickCheckState === "checking") {
+    label.textContent = "Триває перевірка…";
+    return;
+  }
+  if (quickCheckState === "error") {
+    label.textContent = "Не вдалося перевірити";
+    return;
+  }
+  if (!lastSuccessfulCheckAt) {
+    label.textContent = "Ще не перевірялося";
+    label.removeAttribute("title");
+    return;
+  }
+  const checkedAt = new Date(lastSuccessfulCheckAt);
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - checkedAt.getTime()) / 60_000));
+  label.textContent = elapsedMinutes < 1
+    ? "Перевірено щойно"
+    : elapsedMinutes < 60
+      ? `Перевірено ${elapsedMinutes} хв тому`
+      : "Перевірено понад годину тому";
+  label.title = checkedAt.toLocaleString("uk-UA");
+}
+
+async function quickCheckNow() {
+  if (!quickCheckConfigured || quickCheckState === "checking") return;
+  quickCheckState = "checking";
+  updateQuickCheckDisplay();
+  await logUiEvent("check-now");
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "check-now" });
+    if (!response?.ok) throw new Error(response?.error || "розширення не відповіло");
+    if (!["ok", "partial"].includes(response.result?.state)) throw new Error(response.result?.message || "перевірку не завершено");
+    quickCheckState = "idle";
+    await load({ syncSettings: false });
+  } catch (error) {
+    quickCheckState = "error";
+    updateQuickCheckDisplay();
+    setOperationError(`Перевірку не завершено: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function renderTabFavicon(unseenNotificationIds) {
@@ -115,6 +183,8 @@ function loadFaviconImage() {
 }
 
 async function initializeDashboard() {
+  const navigationType = performance.getEntriesByType("navigation")[0]?.type;
+  await logUiEvent(navigationType === "reload" ? "dashboard-reload" : navigationType === "back_forward" ? "dashboard-history" : "dashboard-open");
   const state = await load({ syncSettings: true });
   if (!state?.settings?.privacyConsent) return showPrivacyDialog();
   if (!state.settings.email || !state.settings.hasPassword) return;
@@ -139,6 +209,7 @@ function setDashboardButtonsEnabled(enabled) {
 
 function declinePrivacyConsent(event) {
   event?.preventDefault();
+  void logUiEvent("privacy-decline");
   $("privacy-dialog").close();
   setDashboardButtonsEnabled(false);
 }
@@ -150,6 +221,7 @@ async function savePrivacyConsent(event) {
     setPrivacyConsentError(true);
     return;
   }
+  void logUiEvent("privacy-accept");
   setPrivacyConsentError(false);
   const button = $("privacy-accept");
   button.disabled = true;
@@ -191,6 +263,7 @@ async function markNotificationsReadLocally() {
 
 async function save(event) {
   event.preventDefault();
+  void logUiEvent("save-settings");
   if (!validateSettingsForm()) return;
   setOperationStatus("Зберігаємо налаштування…", true);
   if (!await saveCurrentSettings()) return;
@@ -199,6 +272,7 @@ async function save(event) {
 }
 
 async function checkAuth() {
+  void logUiEvent("check-auth");
   if (!validateSettingsForm()) return;
   setOperationStatus("Зберігаємо налаштування…", true);
   if (!await saveCurrentSettings()) return;
@@ -211,6 +285,7 @@ async function checkAuth() {
 }
 
 async function checkNow() {
+  void logUiEvent("check-now");
   if (!validateSettingsForm()) return;
   setOperationStatus("Зберігаємо налаштування…", true);
   if (!await saveCurrentSettings()) return;
@@ -236,10 +311,14 @@ async function saveCurrentSettings() {
 }
 
 async function clearAll() {
-  if (!confirm("Видалити всі дані розширення? Логін і пароль HUMAN залишаться. Сповіщення, журнал і налаштування інтервалу буде скинуто.")) return;
+  if (!confirm("Видалити всі дані розширення? Логін і пароль HUMAN залишаться. Сповіщення, журнал і налаштування інтервалу буде скинуто.")) {
+    void logUiEvent("clear-all-cancel");
+    return;
+  }
   setOperationStatus("Скидаємо дані…", true);
   const response = await chrome.runtime.sendMessage({ type: "clear-all" });
   if (!response?.ok) return setOperationError(`Не вдалося скинути дані: ${response?.error || "розширення не відповіло. Натисніть Reload на сторінці розширень Chrome."}`);
+  await logUiEvent("clear-all-complete");
   formDirty = false;
   await load({ syncSettings: true });
   setOperationStatus("✓ Усі дані скинуто. Логін і пароль збережено.", false, true);
@@ -249,6 +328,7 @@ async function downloadLogs() {
   const button = $("download-logs");
   button.disabled = true;
   try {
+    await logUiEvent("download-logs");
     const response = await chrome.runtime.sendMessage({ type: "get-state" });
     if (!response?.ok) throw new Error(response?.error || "розширення не відповіло");
     const state = response.state || {};
@@ -298,6 +378,8 @@ function exportableStatus(status) {
 }
 function exportableLog(item = {}) {
   return {
+    operation: item.operation || null,
+    level: item.level || null,
     at: item.at || null,
     trigger: item.trigger || null,
     state: item.state || null,
@@ -314,6 +396,15 @@ function exportableLog(item = {}) {
 function fileTimestamp(date) {
   const pad = (number) => String(number).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
+
+async function logUiEvent(action, detail = "") {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "log-ui-event", action, detail });
+    return response?.ok === true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 function readForm() { return { email: $("email").value, password: $("password").value, intervalMinutes: $("intervalMinutes").value }; }
@@ -454,7 +545,7 @@ function renderLocalReadButton(hasNewNotifications) {
 function eyeOpenIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>'; }
 function eyeClosedIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 6.2A10.9 10.9 0 0 1 12 6c6.1 0 9.5 6 9.5 6a17.4 17.4 0 0 1-3.2 3.8M6.1 6.2A17.2 17.2 0 0 0 2.5 12S5.9 18 12 18c1.4 0 2.6-.3 3.7-.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>'; }
 function renderLog(checkLog) {
-  const rows = checkLog.slice(0, 100).map((item) => {
+  const rows = checkLog.filter((item) => item?.operation !== "UI").slice(0, 100).map((item) => {
     const count = item.newCount == null ? "—" : escapeHtml(String(item.newCount));
     const countCell = Number(item.newCount) > 0 ? `<strong>${count}</strong>` : count;
     return `<tr><td>${escapeHtml(formatLogDate(item.at))}</td><td>${countCell}</td><td>${escapeHtml(logResult(item))}</td></tr>`;
@@ -529,6 +620,7 @@ function gradeClass(data) {
 function notificationTitle(data) { return data.title ?? data.name ?? data.themeTitle ?? data.theme_title ?? data.lessonTitle ?? data.lessonName ?? data.activityTypeName ?? data.activity_type_name ?? data.message ?? "—"; }
 function logResult(item) {
   const detail = item.detail ? `. ${item.detail}` : "";
+  if (item.state === "user_action") return `${item.message || "Дія користувача"}${detail}`;
   if (item.httpStatus) return `${item.httpStatus} ${httpStatusText(item.httpStatus)}${detail}`;
   if (item.state === "ok") return `200 OK${detail}`;
   if (item.state === "network_error") return `Network error${detail}`;

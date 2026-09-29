@@ -89,9 +89,24 @@ test("the explicit local action clears ids only in the selected category", async
   await vm.runInContext('markNotificationsReadLocally("homework")', context);
   assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), ["b"]);
   assert.equal(storage.badgeText, "1");
+  assert.equal(storage.checkLog[0].operation, "UI");
+  assert.equal(storage.checkLog[0].trigger, "mark-read-homework");
+  assert.match(storage.checkLog[0].detail, /Знято позначок: 1\. Залишилось: 1\./);
   await vm.runInContext('markNotificationsReadLocally("grades")', context);
   assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), []);
   assert.equal(storage.badgeText, "");
+  assert.equal(storage.checkLog[0].trigger, "mark-read-grades");
+  assert.match(storage.checkLog[0].detail, /Знято позначок: 1\. Залишилось: 0\./);
+});
+
+test("known dashboard actions are recorded without accepting arbitrary event names", async () => {
+  const { context, storage } = loadWorker();
+  await vm.runInContext('logUiEvent("dashboard-reload", "reload")', context);
+  assert.equal(storage.checkLog[0].operation, "UI");
+  assert.equal(storage.checkLog[0].state, "user_action");
+  assert.equal(storage.checkLog[0].trigger, "dashboard-reload");
+  assert.equal(storage.checkLog[0].detail, "reload");
+  await assert.rejects(vm.runInContext('logUiEvent("password-captured", "secret")', context), /Невідома дія інтерфейсу/);
 });
 
 test("toolbar badge shows the total local new-notification count", async () => {
@@ -152,7 +167,7 @@ test("dashboard only clears local new marks through its explicit eye button", ()
   assert.match(optionsCss, /background: #2d6fc4; color: #ffffff/);
   assert.match(optionsCss, /button\.filter \{[^}]*border: 1px solid #b8cdd8/);
   assert.match(optionsCss, /button\.filter\[data-filter="grades"\] \{[^}]*background: #efecf5/);
-  assert.match(optionsCss, /\.notifications-panel \{ padding: 13px 8px 12px;[^}]*background: #d8e8f1/);
+  assert.match(optionsCss, /\.notifications-panel \{[^}]*border-top: 0;[^}]*border-radius: 10px;[^}]*background: #e4f1f7/);
   assert.match(optionsCss, /\.notifications-table-wrap \{ height: 460px; overflow: auto; border-top: 2px solid #ffffff;/);
   assert.match(optionsCss, /\.notifications-table \{ table-layout: fixed; \}/);
   assert.match(optionsCss, /th:nth-child\(2\), \.notifications-table td:nth-child\(2\) \{ width: 90px/);
@@ -210,10 +225,55 @@ test("diagnostic export includes an up-to-date local storage size", () => {
   assert.match(optionsSource, /diagnosticsVersion:\s*1/);
   assert.match(optionsSource, /chrome\.storage\.local\.getBytesInUse\(null\)/);
   assert.match(optionsSource, /storage:\s*\{ localBytesUsed: storageBytesUsed \}/);
+  assert.match(optionsSource, /operation: item\.operation \|\| null/);
+  assert.match(optionsSource, /level: item\.level \|\| null/);
+});
+
+test("dashboard logs page navigation and important user controls", () => {
+  assert.match(optionsSource, /performance\.getEntriesByType\("navigation"\)/);
+  assert.match(optionsSource, /"dashboard-reload"/);
+  assert.match(optionsSource, /"save-settings"/);
+  assert.match(optionsSource, /"check-auth"/);
+  assert.match(optionsSource, /"check-now"/);
+  assert.match(optionsSource, /"download-logs"/);
+  assert.match(optionsSource, /"category-grades"/);
+  assert.match(optionsSource, /"subject-filter"/);
+  assert.match(optionsSource, /"open-home-task"/);
+  assert.match(optionsCss, /\.auth-row #check-now \{ background: transparent; box-shadow: none; \}/);
+});
+
+test("quick check stays outside settings and reports the age of the last successful check", () => {
+  assert.match(optionsHtml, /id="last-check-age"/);
+  assert.match(optionsHtml, /id="quick-check"[^>]*>Перевірити зараз<\/button>/);
+  assert.ok(optionsHtml.indexOf('id="quick-check"') > optionsHtml.indexOf('</details>'));
+  const quickCheckSource = optionsSource.slice(optionsSource.indexOf("async function quickCheckNow"), optionsSource.indexOf("async function renderTabFavicon"));
+  assert.match(quickCheckSource, /type: "check-now"/);
+  assert.doesNotMatch(quickCheckSource, /saveCurrentSettings|readForm/);
+  assert.match(optionsSource, /Перевірено щойно/);
+  assert.match(optionsSource, /Перевірено \$\{elapsedMinutes\} хв тому/);
+  assert.match(optionsSource, /Перевірено понад годину тому/);
+  assert.match(optionsSource, /window\.setInterval\(updateQuickCheckDisplay, 60_000\)/);
+  assert.match(optionsCss, /\.quick-check \{[^}]*background: transparent/);
+  assert.doesNotMatch(optionsCss, /\.auth-button \{[^}]*font-weight/);
+  assert.match(optionsHtml, /class="category-actions">[\s\S]*id="quick-check"[\s\S]*<\/div>\s*<button[^>]*id="mark-notifications-read"/);
+  assert.ok(optionsHtml.indexOf('id="last-check-age"') < optionsHtml.indexOf('id="quick-check"'));
+  assert.match(optionsCss, /\.quick-check \{[^}]*border-radius: 8px/);
+  assert.match(optionsCss, /\.mark-notifications-read \{[^}]*border-radius: 8px/);
+  assert.match(optionsCss, /\.notifications-panel \{[^}]*background: #e4f1f7/);
+  assert.match(optionsCss, /\.notifications-table th:not\(:last-child\)::after \{[^}]*width: 2px;[^}]*background: #ffffff/);
+  assert.match(optionsCss, /\.notifications-table th:first-child \{[^}]*border-top-left-radius: 7px/);
+  assert.match(optionsCss, /\.category-filters::after \{[^}]*right: 10px;[^}]*left: 10px;[^}]*background: #b8cdd8/);
+  assert.match(optionsCss, /\.category-actions \{[^}]*margin: 0 0 8px auto/);
+  assert.match(optionsCss, /\.mark-notifications-read \{[^}]*margin: 0 0 8px 0/);
 });
 
 test("the dashboard renders up to 100 saved diagnostic records", () => {
-  assert.match(optionsSource, /checkLog\.slice\(0, 100\)/);
+  assert.match(optionsSource, /checkLog\.filter\(\(item\) => item\?\.operation !== "UI"\)\.slice\(0, 100\)/);
+});
+
+test("user activity stays out of the visible log table but remains exportable", () => {
+  assert.match(optionsSource, /operation: item\.operation \|\| null/);
+  assert.match(optionsSource, /item\?\.operation !== "UI"/);
 });
 
 test("authentication and manual loading save the form before sending their request", () => {

@@ -7,6 +7,23 @@ const MAX_NOTIFICATION_STORAGE_BYTES = 7 * 1024 * 1024;
 const MAX_ACTION_BADGE_COUNT = 99;
 const ACTION_BADGE_BACKGROUND_COLOR = "#D93025";
 const ACTION_BADGE_TEXT_COLOR = "#FFFFFF";
+const UI_EVENT_MESSAGES = Object.freeze({
+  "dashboard-open": "Відкрито Dashboard.",
+  "dashboard-reload": "Перезавантажено Dashboard.",
+  "dashboard-history": "Dashboard відкрито з історії вкладки.",
+  "save-settings": "Натиснуто кнопку збереження налаштувань.",
+  "privacy-accept": "Підтверджено згоду на обробку даних.",
+  "privacy-decline": "Відхилено згоду на обробку даних.",
+  "check-auth": "Натиснуто кнопку перевірки авторизації.",
+  "check-now": "Натиснуто кнопку ручної перевірки HUMAN.",
+  "clear-all-cancel": "Скасовано очищення даних розширення.",
+  "clear-all-complete": "Очищено дані розширення.",
+  "download-logs": "Натиснуто кнопку завантаження журналу.",
+  "category-homework": "Відкрито вкладку домашніх завдань.",
+  "category-grades": "Відкрито вкладку оцінок.",
+  "subject-filter": "Вибрано фільтр предмета.",
+  "open-home-task": "Відкрито домашнє завдання в HUMAN."
+});
 const DEFAULTS = {
   email: "",
   password: "",
@@ -111,6 +128,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === "mark-notifications-read-locally") {
     markNotificationsReadLocally(message.category)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: safeError(error) }));
+    return true;
+  }
+
+  if (message?.type === "log-ui-event") {
+    logUiEvent(message.action, message.detail)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: safeError(error) }));
     return true;
@@ -335,12 +359,43 @@ async function markNotificationsReadLocally(category) {
   const selectedCategory = category === "grades" ? "grades" : "homework";
   const data = await chrome.storage.local.get(["notifications", "unseenNotificationIds"]);
   const notificationById = new Map((Array.isArray(data.notifications) ? data.notifications : []).map((item) => [String(item?.id ?? ""), item]));
-  const unseenNotificationIds = normalizeUnseenNotificationIds(data.unseenNotificationIds).filter((id) => {
+  const previousIds = normalizeUnseenNotificationIds(data.unseenNotificationIds);
+  const unseenNotificationIds = previousIds.filter((id) => {
     const notification = notificationById.get(id);
     return selectedCategory === "grades" ? !isGradeNotification(notification) : !isHomeworkNotification(notification);
   });
   await chrome.storage.local.set({ unseenNotificationIds });
   await updateNewNotificationBadge(unseenNotificationIds);
+  const removedCount = previousIds.length - unseenNotificationIds.length;
+  await appendCheckLogBestEffort({
+    operation: "UI",
+    level: "INFO",
+    trigger: `mark-read-${selectedCategory}`,
+    state: "user_action",
+    message: "Натиснуто кнопку ока.",
+    detail: `Категорія: ${selectedCategory === "grades" ? "оцінки" : "домашні завдання"}. Знято позначок: ${removedCount}. Залишилось: ${unseenNotificationIds.length}.`,
+    httpStatus: null
+  });
+  return { category: selectedCategory, removedCount, remainingCount: unseenNotificationIds.length };
+}
+
+async function logUiEvent(action, detail = "") {
+  const normalizedAction = String(action || "").trim();
+  const message = UI_EVENT_MESSAGES[normalizedAction];
+  if (!message) throw new Error("Невідома дія інтерфейсу.");
+  return appendCheckLogBestEffort({
+    operation: "UI",
+    level: "INFO",
+    trigger: normalizedAction,
+    state: "user_action",
+    message,
+    detail: sanitizeUiEventDetail(detail),
+    httpStatus: null
+  });
+}
+
+function sanitizeUiEventDetail(value) {
+  return String(value || "").replace(/[\u0000-\u001F\u007F]/g, " ").trim().slice(0, 160);
 }
 
 async function restoreNewNotificationBadge() {

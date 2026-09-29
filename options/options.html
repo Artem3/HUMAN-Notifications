@@ -64,6 +64,10 @@
       <div id="category-filters" class="category-filters" role="group" aria-label="Тип сповіщень">
         <button type="button" class="filter active" data-filter="homework">Домашні завдання</button>
         <button type="button" class="filter" data-filter="grades">Оцінки</button>
+        <div class="category-actions">
+          <span id="last-check-age" class="last-check-age" aria-live="polite">Ще не перевірялося</span>
+          <button type="button" id="quick-check" class="quick-check">Перевірити зараз</button>
+        </div>
         <button type="button" id="mark-notifications-read" class="mark-notifications-read" aria-label="Позначити всі нові сповіщення прочитаними локально" title="Позначити всі нові прочитаними" disabled></button>
       </div>
       <div id="notifications-panel" class="notifications-panel">
