@@ -68,14 +68,14 @@
           <span id="last-check-age" class="last-check-age" aria-live="polite">Ще не перевірялося</span>
           <button type="button" id="quick-check" class="quick-check">Перевірити зараз</button>
         </div>
-        <button type="button" id="mark-notifications-read" class="mark-notifications-read" aria-label="Позначити всі нові сповіщення прочитаними локально" title="Позначити всі нові прочитаними" disabled></button>
+        <button type="button" id="mark-notifications-read" class="mark-notifications-read" aria-label="Позначити всі нові сповіщення прочитаними локально" title="Позначити прочитаними" disabled></button>
       </div>
       <div id="notifications-panel" class="notifications-panel">
         <div id="subject-filter-buttons" class="subject-filters" role="group" aria-label="Фільтр за предметом"></div>
         <div class="table-wrap notifications-table-wrap">
           <table class="notifications-table">
-            <thead id="notifications-head"><tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th></tr></thead>
-            <tbody id="notifications-table"><tr><td colspan="4">Даних ще немає.</td></tr></tbody>
+            <thead id="notifications-head"><tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th><th>Статус</th><th class="home-task-action">Відкрити</th></tr></thead>
+            <tbody id="notifications-table"><tr><td colspan="6">Даних ще немає.</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -94,6 +94,7 @@
       </form>
     </dialog>
   </main>
+  <script src="shared.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

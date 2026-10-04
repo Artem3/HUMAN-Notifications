@@ -1,8 +1,17 @@
+importScripts("options/shared.js");
+
 const API_ORIGIN = "https://api.human.ua/v1";
 const ALARM_NAME = "human-notifications-check";
 const REQUEST_TIMEOUT_MS = 30000;
 const MAX_CHECK_LOG = 100;
 const ASSESSMENT_DETAIL_LIMIT = 100;
+const HOMEWORK_STATUS_REQUEST_CONCURRENCY = 10;
+// All selected themes use one parallel request wave. Even with the 30-second
+// timeout, the theme phase stays below the five-minute minimum schedule with
+// room for the main notification request.
+const MAX_HOMEWORK_STATUS_REQUEST_BATCHES = 1;
+const MAX_HOMEWORK_STATUS_THEMES_PER_CHECK = HOMEWORK_STATUS_REQUEST_CONCURRENCY * MAX_HOMEWORK_STATUS_REQUEST_BATCHES;
+const { HOME_TASK_STATUS_LABELS, isHomeworkNotification, isGradeNotification } = globalThis.HUMAN_SHARED;
 const MAX_NOTIFICATION_STORAGE_BYTES = 7 * 1024 * 1024;
 const MAX_ACTION_BADGE_COUNT = 99;
 const ACTION_BADGE_BACKGROUND_COLOR = "#D93025";
@@ -251,7 +260,8 @@ async function checkNotifications(trigger) {
   const knownIds = new Set(oldNotifications.filter((item) => item && item.id != null).map((item) => String(item.id)));
   const newItems = notifications.filter((item) => !knownIds.has(item.id));
   const completeHistory = mergeNotifications(oldNotifications, notifications);
-  const merged = fitNotificationsToStorage(completeHistory);
+  const statusRefresh = await refreshHomeworkStatuses(completeHistory, response.institution.id);
+  const merged = fitNotificationsToStorage(statusRefresh.items);
   const unseenNotificationIds = hasNotificationBaseline
     ? mergeUnseenNotificationIds(old.unseenNotificationIds, newItems.filter(isTrackableNotification).map((item) => item.id), merged)
     : [];
@@ -262,6 +272,7 @@ async function checkNotifications(trigger) {
   const details = [`Сповіщення: ${notifications.length}/${merged.length}.`];
   if (merged.length < completeHistory.length) details.push(`Видалено старих сповіщень для дотримання ліміту Chrome: ${completeHistory.length - merged.length}.`);
   if (enrichment.warnings.length) details.push(`Не вдалося визначити предмет для ${enrichment.warnings.length} тем.`);
+  if (statusRefresh.warningCount) details.push(`Не вдалося оновити статус для ${statusRefresh.warningCount} завдань.`);
 
   let assessmentsResponse = await assessmentsPromise;
   if (assessmentsResponse.status === 401) {
@@ -272,6 +283,7 @@ async function checkNotifications(trigger) {
 
   if (!assessmentsResponse.ok) {
     details.push(`Оцінки не оновлено: ${assessmentsResponse.message}`);
+    details.push(formatHomeworkStatusDiagnostics(statusRefresh.diagnostics));
     return writeStatus({
       state: "partial",
       message: "Сповіщення завантажено, але повний журнал оцінок не оновлено.",
@@ -294,6 +306,7 @@ async function checkNotifications(trigger) {
   await chrome.storage.local.set({ assessments });
   details.push(`Оцінки: ${assessments.length}; предметів: ${subjectCount}.`);
   details.push(formatGradeNotificationDiagnostics(assessmentMerge.diagnostics, countGradeNotifications(notifications)));
+  details.push(formatHomeworkStatusDiagnostics(statusRefresh.diagnostics));
   if (assessmentsResponse.warnings.length) details.push(assessmentsResponse.warnings.join(" "));
 
   return writeStatus({
@@ -691,6 +704,161 @@ async function fetchThemeSubject(institutionId, themeId) {
   }
 }
 
+async function refreshHomeworkStatuses(items, institutionId) {
+  const sourceItems = Array.isArray(items) ? items : [];
+  const allTargets = sourceItems.filter((item) => isHomeworkNotification(item) && homeTaskId(item.data));
+  const targets = selectHomeworkStatusTargets(allTargets);
+  const themeIds = [...new Set(targets.map((item) => themeId(item.data)).filter(Boolean))];
+  const selectedNotificationIds = new Set(targets.map((item) => String(item.id)));
+  const diagnostics = {
+    notificationCount: allTargets.length,
+    selectedNotificationCount: targets.length,
+    missingThemeIdCount: targets.length - targets.filter((item) => themeId(item.data)).length,
+    themeCount: themeIds.length,
+    themeHttpStatuses: {},
+    returnedTaskCount: 0,
+    userStatusCount: 0,
+    matchedNotificationCount: 0,
+    statusValueCounts: {},
+    updatedNotificationCount: 0
+  };
+  if (!institutionId) return { items: sourceItems, warningCount: 0, diagnostics };
+
+  // The lesson page expands home_tasks_users and selects the current student's
+  // relation by user_id. Its status is the live submission state.
+  const statusByHomeTaskId = new Map();
+  const statusByHomeTaskUserId = new Map();
+  const failedThemeIds = new Set();
+  let warningCount = 0;
+  for (let index = 0; index < themeIds.length; index += HOMEWORK_STATUS_REQUEST_CONCURRENCY) {
+    const batch = themeIds.slice(index, index + HOMEWORK_STATUS_REQUEST_CONCURRENCY);
+    const results = await Promise.all(batch.map((id) => fetchThemeHomeworkStatuses(institutionId, id)));
+    results.forEach((result, resultIndex) => {
+      if (result.warning) warningCount += 1;
+      if (!result.ok) failedThemeIds.add(batch[resultIndex]);
+      const statusKey = String(result.httpStatus || 0);
+      diagnostics.themeHttpStatuses[statusKey] = (diagnostics.themeHttpStatuses[statusKey] || 0) + 1;
+      diagnostics.returnedTaskCount += result.returnedTaskCount;
+      diagnostics.userStatusCount += result.userStatusCount;
+      Object.entries(result.statusValueCounts).forEach(([status, count]) => {
+        diagnostics.statusValueCounts[status] = (diagnostics.statusValueCounts[status] || 0) + count;
+      });
+      for (const [id, status] of result.statusByHomeTaskId) statusByHomeTaskId.set(id, status);
+      for (const [id, status] of result.statusByHomeTaskUserId) statusByHomeTaskUserId.set(id, status);
+    });
+  }
+
+  const updatedItems = sourceItems.map((item) => {
+    if (!isHomeworkNotification(item)) return item;
+    if (!selectedNotificationIds.has(String(item.id))) return item;
+    if (failedThemeIds.has(themeId(item.data))) return item;
+    const taskId = homeTaskId(item.data);
+    const status = statusByHomeTaskUserId.get(homeTaskUserId(item.data))
+      ?? statusByHomeTaskId.get(taskId);
+    if (status === undefined) {
+      if (!Object.hasOwn(item.data || {}, "homeTaskStatus")) return item;
+      const data = { ...item.data };
+      delete data.homeTaskStatus;
+      return { ...item, data };
+    }
+    diagnostics.matchedNotificationCount += 1;
+    if (Number(item.data?.homeTaskStatus) !== status) diagnostics.updatedNotificationCount += 1;
+    const data = { ...item.data, homeTaskStatus: status };
+    delete data.homeTaskEventAt;
+    return { ...item, data };
+  });
+
+  return {
+    items: updatedItems,
+    warningCount,
+    diagnostics
+  };
+}
+
+function selectHomeworkStatusTargets(items) {
+  const candidates = Array.isArray(items) ? items : [];
+  const selectedThemeIds = new Set();
+  const activeFirst = [...candidates].sort((left, right) => homeworkStatusPriority(left) - homeworkStatusPriority(right));
+  for (const item of activeFirst) {
+    const id = themeId(item.data);
+    if (!id || selectedThemeIds.has(id)) continue;
+    selectedThemeIds.add(id);
+    if (selectedThemeIds.size === MAX_HOMEWORK_STATUS_THEMES_PER_CHECK) break;
+  }
+  return candidates.filter((item) => selectedThemeIds.has(themeId(item.data)));
+}
+
+function homeworkStatusPriority(item) {
+  const status = normalizeHomeTaskStatus(item?.data?.homeTaskStatus);
+  return status === 2 || status === 3 ? 1 : 0;
+}
+
+async function fetchThemeHomeworkStatuses(institutionId, value) {
+  try {
+    const response = await fetchWithTimeout(`${API_ORIGIN}/${encodeURIComponent(institutionId)}/plan/theme/${encodeURIComponent(value)}?expand=home_tasks.home_tasks_users`, { credentials: "include" });
+    if (!response.ok) return emptyHomeworkStatusResult(true, response.status);
+    const theme = await response.json();
+    if (!Array.isArray(theme?.home_tasks)) return emptyHomeworkStatusResult(true, response.status);
+    return mapHomeworkTaskStatuses(theme.home_tasks, response.status, institutionId);
+  } catch {
+    return emptyHomeworkStatusResult(true, 0);
+  }
+}
+
+function mapHomeworkTaskStatuses(tasks, httpStatus, currentUserId) {
+  const statusByHomeTaskId = new Map();
+  const statusByHomeTaskUserId = new Map();
+  const statusValueCounts = {};
+  let userStatusCount = 0;
+  let missingUserLists = 0;
+  for (const task of tasks) {
+    const id = String(task?.id ?? "").trim();
+    const users = task?.home_tasks_users;
+    if (!Array.isArray(users)) {
+      missingUserLists += 1;
+      continue;
+    }
+    if (!id) continue;
+    const ownTask = users.find((user) => String(user?.user_id ?? "") === String(currentUserId));
+    const status = ownTask ? normalizeHomeTaskStatus(ownTask.status) : 0;
+    if (status === null) continue;
+    if (ownTask) userStatusCount += 1;
+    statusValueCounts[String(status)] = (statusValueCounts[String(status)] || 0) + 1;
+    statusByHomeTaskId.set(id, status);
+    const userId = String(ownTask?.id ?? "").trim();
+    if (userId) statusByHomeTaskUserId.set(userId, status);
+  }
+  return { statusByHomeTaskId, statusByHomeTaskUserId, ok: true, warning: missingUserLists > 0, httpStatus, returnedTaskCount: tasks.length, userStatusCount, statusValueCounts };
+}
+
+function emptyHomeworkStatusResult(warning, httpStatus) {
+  return { statusByHomeTaskId: new Map(), statusByHomeTaskUserId: new Map(), ok: false, warning, httpStatus, returnedTaskCount: 0, userStatusCount: 0, statusValueCounts: {} };
+}
+
+function homeTaskId(data = {}) {
+  return String(data.homeTaskId ?? data.home_task_id ?? data.home_task?.id ?? "").trim();
+}
+
+function homeTaskUserId(data = {}) {
+  return String(data.homeTaskUserId ?? data.home_task_user_id ?? data.home_tasks_user?.id ?? "").trim();
+}
+
+function themeId(data = {}) {
+  return String(data.theme_id ?? data.themeId ?? data.theme?.id ?? "").trim();
+}
+
+function normalizeHomeTaskStatus(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const status = Number(value);
+  return Number.isInteger(status) && Object.hasOwn(HOME_TASK_STATUS_LABELS, status) ? status : null;
+}
+
+function formatHomeworkStatusDiagnostics(diagnostics = {}) {
+  const themeHttp = Object.entries(diagnostics.themeHttpStatuses || {}).map(([status, count]) => `${status}×${count}`).join(", ") || "кеш";
+  const values = Object.entries(diagnostics.statusValueCounts || {}).map(([status, count]) => `${status}×${count}`).join(", ") || "—";
+  return `Статуси ДЗ: сповіщень з ID: ${Number(diagnostics.notificationCount) || 0}; обрано: ${Number(diagnostics.selectedNotificationCount) || 0}; тем: ${Number(diagnostics.themeCount) || 0}; тема HTTP: ${themeHttp}; завдань: ${Number(diagnostics.returnedTaskCount) || 0}; робіт учня: ${Number(diagnostics.userStatusCount) || 0}; значення: ${values}; збігів: ${Number(diagnostics.matchedNotificationCount) || 0}; оновлено рядків: ${Number(diagnostics.updatedNotificationCount) || 0}.`;
+}
+
 function extractSubject(theme) {
   return theme?.subject?.i18n?.name || theme?.subject?.name || theme?.theme_container?.lesson_plan?.group?.subject?.i18n?.name || theme?.theme_container?.lesson_plan?.group?.subject?.name || theme?.lesson_plan?.group?.subject?.i18n?.name || theme?.lesson_plan?.group?.subject?.name || "";
 }
@@ -875,16 +1043,8 @@ function mergeAssessmentNotificationTimes(assessmentItems, notificationItems) {
   };
 }
 
-function isGradeNotification(item) {
-  return /^grade_(home|lesson)_task$/i.test(String(item?.type || ""));
-}
-
 function isTrackableNotification(item) {
   return isHomeworkNotification(item) || isGradeNotification(item);
-}
-
-function isHomeworkNotification(item) {
-  return String(item?.type || "").toLowerCase().startsWith("home_task_");
 }
 
 function countGradeNotifications(items) {

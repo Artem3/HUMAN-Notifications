@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const { HOME_TASK_STATUS_LABELS, isHomeworkNotification, isGradeNotification } = window.HUMAN_SHARED;
 let activeFilter = "homework";
 let activeSubject = "all";
 let formDirty = false;
@@ -9,7 +10,9 @@ let faviconImagePromise = null;
 let lastSuccessfulCheckAt = null;
 let quickCheckState = "idle";
 let quickCheckConfigured = false;
+let backgroundCheckState = null;
 let checkAgeTimerId = null;
+let stateReloadQueued = false;
 const NEW_MARKER_TRANSITION_MS = 300;
 const renderedSubjectBadgeKeysByCategory = new Map();
 
@@ -43,7 +46,7 @@ $("subject-filter-buttons").addEventListener("click", (event) => {
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (!localReadInProgress && area === "local" && (changes.status || changes.notifications || changes.assessments || changes.checkLog || changes.unseenNotificationIds)) {
-    load({ syncSettings: false });
+    queueStateReload();
   }
 });
 $("notifications-table").addEventListener("click", (event) => {
@@ -59,9 +62,9 @@ async function load({ syncSettings = false } = {}) {
   const response = await chrome.runtime.sendMessage({ type: "get-state" });
   if (requestId !== loadRequestId) return;
   if (!response?.ok) return setOperationStatus("Не вдалося завантажити стан.");
-  const { settings, notifications, assessments, checkLog, unseenNotificationIds } = response.state;
+  const { settings, status, notifications, assessments, checkLog, unseenNotificationIds } = response.state;
   setDashboardButtonsEnabled(settings.privacyConsent === true);
-  renderQuickCheckState(checkLog || [], settings);
+  renderQuickCheckState(checkLog || [], settings, status);
   if (!settings.privacyConsent || !settings.email || !settings.hasPassword) $("settings-details").open = true;
   if (syncSettings && !formDirty) {
     $("email").value = settings.email || "";
@@ -77,8 +80,18 @@ async function load({ syncSettings = false } = {}) {
   return response.state;
 }
 
-function renderQuickCheckState(checkLog, settings) {
+function queueStateReload() {
+  if (stateReloadQueued) return;
+  stateReloadQueued = true;
+  Promise.resolve().then(() => {
+    stateReloadQueued = false;
+    void load({ syncSettings: false });
+  });
+}
+
+function renderQuickCheckState(checkLog, settings, status) {
   quickCheckConfigured = settings?.privacyConsent === true && Boolean(settings.email) && settings.hasPassword === true;
+  backgroundCheckState = ["checking", "reauthorizing"].includes(status?.state) ? status.state : null;
   const latestSuccessfulCheck = (Array.isArray(checkLog) ? checkLog : []).find((item) => item?.operation === "CHECK" && ["ok", "partial"].includes(item.state) && item.at);
   const nextSuccessfulCheckAt = latestSuccessfulCheck?.at || null;
   if (quickCheckState === "error" && nextSuccessfulCheckAt && nextSuccessfulCheckAt !== lastSuccessfulCheckAt) quickCheckState = "idle";
@@ -90,11 +103,13 @@ function renderQuickCheckState(checkLog, settings) {
 function updateQuickCheckDisplay() {
   const button = $("quick-check");
   const label = $("last-check-age");
-  button.disabled = !quickCheckConfigured || quickCheckState === "checking";
-  button.textContent = quickCheckState === "checking" ? "Перевіряємо…" : "Перевірити зараз";
-  button.setAttribute("aria-busy", quickCheckState === "checking" ? "true" : "false");
-  if (quickCheckState === "checking") {
-    label.textContent = "Триває перевірка…";
+  const isChecking = quickCheckState === "checking" || backgroundCheckState !== null;
+  button.disabled = !quickCheckConfigured || isChecking;
+  button.textContent = isChecking ? "Перевіряємо…" : "Перевірити зараз";
+  button.setAttribute("aria-busy", isChecking ? "true" : "false");
+  label.classList.toggle("is-checking", isChecking);
+  if (isChecking) {
+    label.textContent = backgroundCheckState === "reauthorizing" ? "Оновлюємо сеанс…" : "Триває перевірка…";
     return;
   }
   if (quickCheckState === "error") {
@@ -450,7 +465,7 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
   document.querySelector(".notifications-table-wrap").classList.toggle("grades-table", isGrades);
   $("notifications-head").innerHTML = isGrades
     ? "<tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th><th>Оцінка</th></tr>"
-    : "<tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th><th class=\"home-task-action\">Відкрити</th></tr>";
+    : "<tr><th>№</th><th>Дата й час</th><th>Предмет</th><th>Тема</th><th class=\"home-task-status\">Статус</th><th class=\"home-task-action\">Відкрити</th></tr>";
   const availableSubjects = new Set(categoryNotifications.map((item) => subjectName(item.data || {})).filter((value) => value !== "—"));
   const visibleSubject = availableSubjects.has(activeSubject) ? activeSubject : "all";
   $("subject-filter-buttons").innerHTML = [
@@ -485,13 +500,14 @@ function renderNotifications(notifications, assessments, unseenNotificationIds) 
     const actionCell = !isGrades
       ? `<td class="home-task-action">${homeTaskUrlValue ? `<button type="button" class="home-task-open" data-home-task-url="${escapeHtml(homeTaskUrlValue)}" aria-label="Відкрити домашнє завдання в HUMAN" title="Відкрити в HUMAN">${homeTaskOpenIcon()}</button>` : "—"}</td>`
       : "";
+    const statusCell = !isGrades ? `<td class="home-task-status">${escapeHtml(homeTaskStatusLabel(data))}</td>` : "";
     const number = visibleRows.length - index;
     const isNew = isGrades ? unseenIds.has(String(data.notificationId || "")) : unseenIds.has(String(item.id));
     const rowClasses = [colors ? "subject-row" : "", isNew ? "new-notification-row" : "", index === dayDividerIndex ? "day-divider" : ""].filter(Boolean).join(" ");
     const cells = `<td class="notification-number"><span class="notification-number-content"><span>${number}</span></span></td><td class="date-cell">${formatDate(item.createdAt)}</td><td class="subject-cell">${escapeHtml(courseName(data))}</td><td>${title}</td>`;
-    return `<tr class="${rowClasses}"${rowStyle}>${cells}${isGrades ? `<td class="grade-cell"><span class="${gradeClass(data)}">${escapeHtml(gradeValue(data))}</span></td>` : actionCell}</tr>`;
+    return `<tr class="${rowClasses}"${rowStyle}>${cells}${isGrades ? `<td class="grade-cell"><span class="${gradeClass(data)}">${escapeHtml(gradeValue(data))}</span></td>` : `${statusCell}${actionCell}`}</tr>`;
   }).join("");
-  $("notifications-table").innerHTML = rows || '<tr><td colspan="5">Даних ще немає.</td></tr>';
+  $("notifications-table").innerHTML = rows || `<tr><td colspan="${isGrades ? 5 : 6}">Даних ще немає.</td></tr>`;
   queueBadgeReveal();
 }
 function countNewNotificationsBySubject(items, unseenIds, isGrades) {
@@ -540,7 +556,7 @@ function renderLocalReadButton(hasNewNotifications) {
   button.disabled = !hasNewNotifications;
   button.innerHTML = hasNewNotifications ? eyeOpenIcon() : eyeClosedIcon();
   button.setAttribute("aria-label", hasNewNotifications ? "Позначити всі нові сповіщення прочитаними локально" : "Нових сповіщень немає");
-  button.title = hasNewNotifications ? "Позначити всі нові прочитаними" : "Нових сповіщень немає";
+  button.title = hasNewNotifications ? "Позначити прочитаними" : "Нових сповіщень немає";
 }
 function eyeOpenIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>'; }
 function eyeClosedIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 6.2A10.9 10.9 0 0 1 12 6c6.1 0 9.5 6 9.5 6a17.4 17.4 0 0 1-3.2 3.8M6.1 6.2A17.2 17.2 0 0 0 2.5 12S5.9 18 12 18c1.4 0 2.6-.3 3.7-.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>'; }
@@ -551,12 +567,6 @@ function renderLog(checkLog) {
     return `<tr><td>${escapeHtml(formatLogDate(item.at))}</td><td>${countCell}</td><td>${escapeHtml(logResult(item))}</td></tr>`;
   }).join("");
   $("check-log").innerHTML = rows || '<tr><td colspan="3">Перевірок ще немає.</td></tr>';
-}
-function isHomeworkNotification(item) {
-  return String(item?.type || "").toLowerCase().startsWith("home_task_");
-}
-function isGradeNotification(item) {
-  return /^grade_(home|lesson)_task$/i.test(String(item?.type || ""));
 }
 function displaySubjectName(value) {
   return value === "Математика (Алгебра і початки аналізу та геометрія)" ? "Математика" : value;
@@ -611,6 +621,10 @@ function homeTaskUrl(item, isGrades) {
   const homeTaskId = String(item.data?.homeTaskId ?? "").trim();
   if (!/^\d+$/.test(themeId) || !/^\d+$/.test(homeTaskId)) return "";
   return `https://lms.human.ua/lesson/${themeId}?tab=${homeTaskId}&type=home-task&notificationType=student`;
+}
+function homeTaskStatusLabel(data = {}) {
+  if (data.homeTaskStatus === null || data.homeTaskStatus === undefined || data.homeTaskStatus === "") return "—";
+  return HOME_TASK_STATUS_LABELS[Number(data.homeTaskStatus)] || "—";
 }
 function gradeValue(data) { return data.gradeDisplayValue ?? data.gradeValue ?? data.gradeGrade ?? "—"; }
 function gradeClass(data) {

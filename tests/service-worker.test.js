@@ -6,6 +6,8 @@ const vm = require("node:vm");
 
 const workerPath = path.join(__dirname, "..", "service-worker.js");
 const workerSource = fs.readFileSync(workerPath, "utf8");
+const sharedPath = path.join(__dirname, "..", "options", "shared.js");
+const sharedSource = fs.readFileSync(sharedPath, "utf8");
 const optionsHtml = fs.readFileSync(path.join(__dirname, "..", "options", "options.html"), "utf8");
 const optionsSource = fs.readFileSync(path.join(__dirname, "..", "options", "options.js"), "utf8");
 const optionsCss = fs.readFileSync(path.join(__dirname, "..", "options", "options.css"), "utf8");
@@ -59,6 +61,12 @@ function loadWorker() {
     URL,
     URLSearchParams
   });
+  context.importScripts = (...files) => {
+    for (const file of files) {
+      assert.equal(file, "options/shared.js");
+      vm.runInContext(sharedSource, context, { filename: sharedPath });
+    }
+  };
   vm.runInContext(workerSource, context, { filename: workerPath });
   return { context, storage };
 }
@@ -69,6 +77,12 @@ test("clampInterval enforces the configured 5 minute minimum and 1440 maximum", 
   assert.equal(vm.runInContext("clampInterval(30.6)", context), 31);
   assert.equal(vm.runInContext("clampInterval(2000)", context), 1440);
   assert.equal(vm.runInContext("clampInterval('bad')", context), 30);
+});
+
+test("shared status and notification rules are used by the worker", () => {
+  const { context } = loadWorker();
+  assert.equal(vm.runInContext('HOME_TASK_STATUS_LABELS[2]', context), "Прийнято");
+  assert.equal(vm.runInContext('isHomeworkNotification({ type: "home_task_pending" })', context), true);
 });
 
 test("clicking the toolbar icon opens the main options page", async () => {
@@ -157,7 +171,8 @@ test("dashboard only clears local new marks through its explicit eye button", ()
   assert.match(optionsSource, /const renderedSubjectBadgeKeysByCategory = new Map\(\)/);
   assert.match(optionsSource, /function queueBadgeReveal\(\)/);
   assert.match(optionsSource, /const NEW_MARKER_TRANSITION_MS = 300/);
-  assert.match(optionsSource, /function isGradeNotification\(item\)/);
+  assert.match(optionsHtml, /<script src="shared\.js"><\/script>/);
+  assert.match(optionsSource, /isHomeworkNotification, isGradeNotification \} = window\.HUMAN_SHARED/);
   assert.match(optionsSource, /not\(#mark-notifications-read\)/);
   assert.match(optionsSource, /function validateSettingsForm\(\)/);
   assert.match(optionsSource, /Інтервал має бути цілим числом від 5 до 1440 хв\./);
@@ -171,7 +186,7 @@ test("dashboard only clears local new marks through its explicit eye button", ()
   assert.match(optionsCss, /\.notifications-table-wrap \{ height: 460px; overflow: auto; border-top: 2px solid #ffffff;/);
   assert.match(optionsCss, /\.notifications-table \{ table-layout: fixed; \}/);
   assert.match(optionsCss, /th:nth-child\(2\), \.notifications-table td:nth-child\(2\) \{ width: 90px/);
-  assert.match(optionsCss, /th:nth-child\(3\), \.notifications-table td:nth-child\(3\) \{ width: 200px/);
+  assert.match(optionsCss, /th:nth-child\(3\), \.notifications-table td:nth-child\(3\) \{ width: 150px; min-width: 110px; max-width: 150px;/);
   assert.match(optionsCss, /th:last-child, \.notifications-table \.home-task-action, \.notifications-table \.grade-cell \{ width: 76px/);
   assert.match(optionsCss, /width: 6px; content: ""; background: #2d6fc4/);
   assert.match(optionsCss, /transition: opacity \.3s ease, transform \.3s ease/);
@@ -196,6 +211,30 @@ test("HUMAN checks require privacy consent", async () => {
   const result = await vm.runInContext('runCheck("test")', context);
   assert.equal(result.state, "not_configured");
   assert.match(result.message, /Підтвердьте обробку даних/);
+});
+
+test("a scheduled check reauthorizes only after HUMAN returns 401", async () => {
+  const { context, storage } = loadWorker();
+  storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
+  await vm.runInContext(`
+    globalThis.notificationRequests = 0;
+    globalThis.automaticAuthRequests = 0;
+    getNotifications = async () => {
+      globalThis.notificationRequests += 1;
+      if (globalThis.notificationRequests === 1) return { ok: false, status: 401, message: "Unauthorized" };
+      return { ok: true, status: 200, data: { notifications: [] }, institution: { id: "496946" } };
+    };
+    login = async () => {
+      globalThis.automaticAuthRequests += 1;
+      return { ok: true, status: 200 };
+    };
+    getAssessments = async () => ({ ok: true, detailed: [], summary: [], warnings: [] });
+  `, context);
+  const result = await vm.runInContext('runCheck("scheduled")', context);
+  assert.equal(result.state, "ok");
+  assert.equal(vm.runInContext("notificationRequests", context), 2);
+  assert.equal(vm.runInContext("automaticAuthRequests", context), 1);
+  assert.equal(storage.checkLog[0].trigger, "scheduled");
 });
 
 test("the privacy popup uses an inline consent error instead of browser validation", () => {
@@ -252,8 +291,13 @@ test("quick check stays outside settings and reports the age of the last success
   assert.match(optionsSource, /Перевірено щойно/);
   assert.match(optionsSource, /Перевірено \$\{elapsedMinutes\} хв тому/);
   assert.match(optionsSource, /Перевірено понад годину тому/);
+  assert.match(optionsSource, /renderQuickCheckState\(checkLog \|\| \[\], settings, status\)/);
+  assert.match(optionsSource, /backgroundCheckState = \["checking", "reauthorizing"\]\.includes\(status\?\.state\) \? status\.state : null/);
+  assert.match(optionsSource, /const isChecking = quickCheckState === "checking" \|\| backgroundCheckState !== null/);
   assert.match(optionsSource, /window\.setInterval\(updateQuickCheckDisplay, 60_000\)/);
   assert.match(optionsCss, /\.quick-check \{[^}]*background: transparent/);
+  assert.match(optionsCss, /\.last-check-age\.is-checking::after \{[^}]*animation: notification-check-spin \.7s linear infinite/);
+  assert.match(optionsSource, /button\.title = hasNewNotifications \? "Позначити прочитаними"/);
   assert.doesNotMatch(optionsCss, /\.auth-button \{[^}]*font-weight/);
   assert.match(optionsHtml, /class="category-actions">[\s\S]*id="quick-check"[\s\S]*<\/div>\s*<button[^>]*id="mark-notifications-read"/);
   assert.ok(optionsHtml.indexOf('id="last-check-age"') < optionsHtml.indexOf('id="quick-check"'));
@@ -286,6 +330,121 @@ test("the subject column uses the Ukrainian label in the initial and rendered ta
   assert.doesNotMatch(optionsSource, /Курс\s*\/\s*група/);
   assert.match(optionsHtml, /<th>Предмет<\/th>/);
   assert.match(optionsSource, /<th>Предмет<\/th>/);
+});
+
+test("homework status refresh reads the current student's lesson relation", async () => {
+  const { context } = loadWorker();
+  let submitted = true;
+  let requestFails = false;
+  context.fetch = async (url) => {
+    const value = String(url);
+    assert.match(value, /\/plan\/theme\/81\?expand=home_tasks\.home_tasks_users$/);
+    if (requestFails) throw Object.assign(new Error("request aborted"), { name: "AbortError" });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { home_tasks: [
+          { id: 51046467, home_tasks_users: [{ id: 900, user_id: 111, status: 0 }, { id: 901, user_id: 496946, status: submitted ? 1 : 2 }] },
+          { id: 56871961, home_tasks_users: [] },
+          { id: 703, home_tasks_users: [{ id: 903, user_id: 496946, status: 3 }] },
+          { id: 704, home_tasks_users: [{ id: 904, user_id: 496946, status: 9 }] }
+        ] };
+      }
+    };
+  };
+  context.history = [
+    { id: "physics", type: "home_task_pending", data: { theme_id: 81, homeTaskId: 51046467, homeTaskStatus: 0 } },
+    { id: "language", type: "home_task_created", data: { theme_id: 81, homeTaskId: 56871961 } },
+    { id: "returned", type: "home_task_created", data: { theme_id: 81, homeTaskId: 703 } },
+    { id: "unknown", type: "home_task_created", data: { theme_id: 81, homeTaskId: 704, homeTaskStatus: 0 } },
+    { id: "missing", type: "home_task_pending", data: { theme_id: 81, homeTaskId: 705, homeTaskStatus: 1 } },
+    { id: "grade", type: "grade_home_task", data: { theme_id: 81, homeTaskId: 51046467 } }
+  ];
+  const first = await vm.runInContext('refreshHomeworkStatuses(history, "496946")', context);
+  const items = JSON.parse(JSON.stringify(first.items));
+  assert.equal(items[0].data.homeTaskStatus, 1);
+  assert.equal(Object.hasOwn(items[0].data, "homeTaskEventAt"), false);
+  assert.equal(items[1].data.homeTaskStatus, 0);
+  assert.equal(items[2].data.homeTaskStatus, 3);
+  assert.equal(Object.hasOwn(items[2].data, "homeTaskEventAt"), false);
+  assert.equal(Object.hasOwn(items[3].data, "homeTaskStatus"), false);
+  assert.equal(Object.hasOwn(items[4].data, "homeTaskStatus"), false);
+  assert.equal(Object.hasOwn(items[5].data, "homeTaskStatus"), false);
+  context.history = items;
+  submitted = false;
+  const second = await vm.runInContext('refreshHomeworkStatuses(history, "496946")', context);
+  assert.equal(second.items[0].data.homeTaskStatus, 2);
+  assert.equal(Object.hasOwn(second.items[0].data, "homeTaskEventAt"), false);
+  assert.equal(second.items[1].data.homeTaskStatus, 0);
+  context.history = JSON.parse(JSON.stringify(second.items));
+  requestFails = true;
+  const failed = await vm.runInContext('refreshHomeworkStatuses(history, "496946")', context);
+  assert.equal(failed.warningCount, 1);
+  assert.equal(failed.diagnostics.themeHttpStatuses["0"], 1);
+  assert.equal(failed.items[0].data.homeTaskStatus, 2);
+  assert.equal(Object.hasOwn(failed.items[0].data, "homeTaskEventAt"), false);
+  assert.equal(failed.items[1].data.homeTaskStatus, 0);
+  assert.equal(first.warningCount, 0);
+  assert.equal(first.diagnostics.matchedNotificationCount, 3);
+  assert.match(optionsHtml, /<th>Статус<\/th><th class="home-task-action">Відкрити<\/th>/);
+  assert.match(optionsSource, /function homeTaskStatusLabel\(data = \{\}\)/);
+  assert.match(optionsCss, /\.home-task-status \{ width: 108px/);
+  assert.match(optionsCss, /@media \(max-width: 640px\)[\s\S]*?\.notifications-table \{ min-width: 560px; \}/);
+  assert.match(optionsCss, /@media \(max-width: 640px\)[\s\S]*?th:nth-child\(3\), \.notifications-table td:nth-child\(3\) \{ width: 110px; max-width: 110px; \}/);
+});
+
+test("a live approved status never replaces the notification timestamp", async () => {
+  const { context } = loadWorker();
+  context.fetch = async (url) => {
+    const value = String(url);
+    assert.match(value, /\/plan\/theme\/82103374\?expand=home_tasks\.home_tasks_users$/);
+    return { ok: true, status: 200, async json() {
+      return { home_tasks: [{ id: 51204943, home_tasks_users: [{ id: 9001, user_id: 496946, status: 2 }] }] };
+    } };
+  };
+  const result = await vm.runInContext(`refreshHomeworkStatuses([{
+    id: "approval", type: "home_task_approve", createdAt: "2026-09-27T14:00:00Z",
+    data: { theme_id: 82103374, homeTaskId: 51204943 }
+  }], "496946")`, context);
+  assert.equal(result.items[0].data.homeTaskStatus, 2);
+  assert.equal(Object.hasOwn(result.items[0].data, "homeTaskEventAt"), false);
+  assert.equal(result.items[0].createdAt, "2026-09-27T14:00:00Z");
+  assert.equal(result.warningCount, 0);
+  assert.match(optionsSource, /formatDate\(item\.createdAt\)/);
+});
+
+test("homework status refresh bounds requests and keeps skipped status data", async () => {
+  const { context } = loadWorker();
+  const requestedThemes = [];
+  context.fetch = async (url) => {
+    const value = String(url);
+    const match = value.match(/\/plan\/theme\/(\d+)\?/);
+    assert.ok(match, `unexpected request: ${value}`);
+    const theme = Number(match[1]);
+    requestedThemes.push(theme);
+    return { ok: true, status: 200, async json() {
+      return { home_tasks: [{ id: theme * 10, home_tasks_users: [{ id: theme * 100, user_id: 496946, status: 1 }] }] };
+    } };
+  };
+  const history = Array.from({ length: 12 }, (_, index) => {
+    const theme = index + 1;
+    return {
+      id: `notification-${theme}`,
+      type: "home_task_created",
+      data: { theme_id: theme, homeTaskId: theme * 10, homeTaskStatus: theme === 12 ? 1 : 2 }
+    };
+  });
+  const result = await vm.runInContext(`refreshHomeworkStatuses(${JSON.stringify(history)}, "496946")`, context);
+  assert.deepEqual(requestedThemes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 12]);
+  assert.equal(result.diagnostics.notificationCount, 12);
+  assert.equal(result.diagnostics.selectedNotificationCount, 10);
+  assert.equal(result.diagnostics.themeCount, 10);
+  assert.equal(result.items[9].data.homeTaskStatus, 2);
+  assert.equal(result.items[10].data.homeTaskStatus, 2);
+  assert.match(workerSource, /const HOMEWORK_STATUS_REQUEST_CONCURRENCY = 10;/);
+  assert.match(workerSource, /const MAX_HOMEWORK_STATUS_REQUEST_BATCHES = 1;/);
+  assert.match(workerSource, /MAX_HOMEWORK_STATUS_THEMES_PER_CHECK = HOMEWORK_STATUS_REQUEST_CONCURRENCY \* MAX_HOMEWORK_STATUS_REQUEST_BATCHES/);
 });
 
 test("the log gives its narrow new-count column to the diagnostic result", () => {
@@ -619,7 +778,7 @@ test("a full check stores notifications and the separate complete grade source",
   const { context, storage } = loadWorker();
   storage.settings = { email: "student@example.com", password: "secret-password", intervalMinutes: 30, privacyConsent: true };
   storage.assessments = Array.from({ length: 3264 }, (_, index) => ({ id: `old:${index}` }));
-  let notificationBatch = [{ id: 1, uid: "home_task_created", created_at: "2026-09-20T08:00:00Z", data: {} }];
+  let notificationBatch = [{ id: 1, uid: "home_task_created", created_at: "2026-09-20T08:00:00Z", data: { theme_id: 81, homeTaskId: 810 } }];
   context.fetch = async (url) => {
     const value = String(url);
     let data;
@@ -629,6 +788,11 @@ test("a full check stores notifications and the separate complete grade source",
       data = { academicYears: [{ id: 2026, status: 1 }] };
     } else if (value.endsWith("/496946/notifications")) {
       data = { notifications: notificationBatch };
+    } else if (value.includes("/plan/theme/81?")) {
+      data = {
+        subject: { name: "Фізика" },
+        home_tasks: [{ id: 810, home_tasks_users: [{ id: 901, user_id: 496946, status: 1 }] }]
+      };
     } else if (value.includes("/analytics/data/assessments/student/496946")) {
       assert.equal(new URL(value).searchParams.get("academicYearId"), "2026");
       data = { subjects: [
@@ -653,6 +817,7 @@ test("a full check stores notifications and the separate complete grade source",
   assert.equal(storage.checkLog[0].level, "INFO");
   assert.match(storage.checkLog[0].checkId, /^check-/);
   assert.match(storage.checkLog[0].detail, /^Сповіщення: 1\/1\. Оцінки: 2; предметів: 2\. Нові оцінки: 0\/0;/);
+  assert.match(storage.checkLog[0].detail, /Статуси ДЗ: сповіщень з ID: 1; обрано: 1; тем: 1; тема HTTP: 200×1;/);
   assert.doesNotMatch(JSON.stringify(storage.checkLog), /secret-password/);
   assert.deepEqual(JSON.parse(JSON.stringify(storage.unseenNotificationIds)), [], "the first sync establishes a baseline");
 
