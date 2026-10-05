@@ -11,6 +11,7 @@ const sharedSource = fs.readFileSync(sharedPath, "utf8");
 const optionsHtml = fs.readFileSync(path.join(__dirname, "..", "options", "options.html"), "utf8");
 const optionsSource = fs.readFileSync(path.join(__dirname, "..", "options", "options.js"), "utf8");
 const optionsCss = fs.readFileSync(path.join(__dirname, "..", "options", "options.css"), "utf8");
+const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
 
 function loadWorker() {
   const storage = {};
@@ -83,6 +84,35 @@ test("shared status and notification rules are used by the worker", () => {
   const { context } = loadWorker();
   assert.equal(vm.runInContext('HOME_TASK_STATUS_LABELS[2]', context), "Прийнято");
   assert.equal(vm.runInContext('isHomeworkNotification({ type: "home_task_pending" })', context), true);
+});
+
+test("the classic worker can load the shared rules with importScripts", () => {
+  assert.equal(manifest.background.service_worker, "service-worker.js");
+  assert.equal(manifest.background.type, undefined);
+  assert.match(workerSource, /^importScripts\("options\/shared\.js"\);/);
+});
+
+test("a disconnected worker is shown as a settings-save error", async () => {
+  const start = optionsSource.indexOf("async function saveCurrentSettings()");
+  const end = optionsSource.indexOf("async function clearAll()", start);
+  const saveSettingsSource = optionsSource.slice(start, end);
+  const errors = [];
+  const result = await vm.runInNewContext(`${saveSettingsSource}\nsaveCurrentSettings()`, {
+    chrome: {
+      runtime: {
+        async sendMessage() {
+          throw new Error("Could not establish connection. Receiving end does not exist.");
+        }
+      }
+    },
+    readForm: () => ({ intervalMinutes: 30 }),
+    setOperationError: (message) => errors.push(message)
+  });
+
+  assert.equal(result, false);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^Не вдалося зберегти налаштування:/);
+  assert.match(errors[0], /Could not establish connection/);
 });
 
 test("clicking the toolbar icon opens the main options page", async () => {

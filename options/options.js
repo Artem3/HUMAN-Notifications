@@ -316,13 +316,19 @@ async function checkNow() {
 }
 
 async function saveCurrentSettings() {
-  const response = await chrome.runtime.sendMessage({ type: "save-settings", settings: readForm() });
-  if (!response?.ok) {
-    setOperationError(`Не вдалося зберегти налаштування: ${response?.error || "розширення не відповіло. Натисніть Reload на сторінці розширень Chrome."}`);
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "save-settings", settings: readForm() });
+    if (!response?.ok) {
+      setOperationError(`Не вдалося зберегти налаштування: ${response?.error || "розширення не відповіло. Натисніть Reload на сторінці розширень Chrome."}`);
+      return false;
+    }
+    formDirty = false;
+    return true;
+  } catch (error) {
+    const detail = String(error?.message || "").trim();
+    setOperationError(`Не вдалося зберегти налаштування: ${detail || "розширення не відповіло. Натисніть Reload на сторінці розширень Chrome."}`);
     return false;
   }
-  formDirty = false;
-  return true;
 }
 
 async function clearAll() {
