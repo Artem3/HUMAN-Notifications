@@ -90,6 +90,7 @@ test("the classic worker can load the shared rules with importScripts", () => {
   assert.equal(manifest.background.service_worker, "service-worker.js");
   assert.equal(manifest.background.type, undefined);
   assert.match(workerSource, /^importScripts\("options\/shared\.js"\);/);
+  assert.equal(manifest.version, "1.6");
 });
 
 test("a disconnected worker is shown as a settings-save error", async () => {
@@ -444,7 +445,27 @@ test("a live approved status never replaces the notification timestamp", async (
   assert.match(optionsSource, /formatDate\(item\.createdAt\)/);
 });
 
-test("homework status refresh bounds requests and keeps skipped status data", async () => {
+test("homework status refresh reads an exact student task record when the notification provides its id", async () => {
+  const { context } = loadWorker();
+  const urls = [];
+  context.fetch = async (url) => {
+    urls.push(String(url));
+    return { ok: true, status: 200, async json() { return { status: 1 }; } };
+  };
+  const result = await vm.runInContext(`refreshHomeworkStatuses([{
+    id: "chemistry", type: "home_task_created", createdAt: "2026-10-04T14:34:17Z",
+    data: { theme_id: 81766493, homeTaskId: 50969448, homeTaskUserId: 823468662 }
+  }], "496946")`, context);
+  assert.deepEqual(urls, ["https://api.human.ua/v1/496946/home-task/home-tasks-users/823468662"]);
+  assert.equal(result.items[0].data.homeTaskStatus, 1);
+  assert.equal(result.diagnostics.detailCount, 1);
+  assert.equal(result.diagnostics.detailHttpStatuses["200"], 1);
+  assert.equal(result.diagnostics.themeCount, 0);
+  assert.equal(result.diagnostics.matchedNotificationCount, 1);
+  assert.match(vm.runInContext(`formatHomeworkStatusDiagnostics(${JSON.stringify(result.diagnostics)})`, context), /карток учня: 1; картка HTTP: 200×1/);
+});
+
+test("homework status refreshes every distinct target and keeps status data", async () => {
   const { context } = loadWorker();
   const requestedThemes = [];
   context.fetch = async (url) => {
@@ -457,24 +478,60 @@ test("homework status refresh bounds requests and keeps skipped status data", as
       return { home_tasks: [{ id: theme * 10, home_tasks_users: [{ id: theme * 100, user_id: 496946, status: 1 }] }] };
     } };
   };
-  const history = Array.from({ length: 12 }, (_, index) => {
+  const history = Array.from({ length: 35 }, (_, index) => {
     const theme = index + 1;
     return {
       id: `notification-${theme}`,
       type: "home_task_created",
-      data: { theme_id: theme, homeTaskId: theme * 10, homeTaskStatus: theme === 12 ? 1 : 2 }
+      data: { theme_id: theme, homeTaskId: theme * 10, homeTaskStatus: theme === 35 ? 1 : 2 }
     };
   });
   const result = await vm.runInContext(`refreshHomeworkStatuses(${JSON.stringify(history)}, "496946")`, context);
-  assert.deepEqual(requestedThemes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 12]);
-  assert.equal(result.diagnostics.notificationCount, 12);
-  assert.equal(result.diagnostics.selectedNotificationCount, 10);
-  assert.equal(result.diagnostics.themeCount, 10);
-  assert.equal(result.items[9].data.homeTaskStatus, 2);
-  assert.equal(result.items[10].data.homeTaskStatus, 2);
+  assert.deepEqual(requestedThemes, Array.from({ length: 35 }, (_, index) => index + 1));
+  assert.equal(result.diagnostics.notificationCount, 35);
+  assert.equal(result.diagnostics.selectedNotificationCount, 35);
+  assert.equal(result.diagnostics.themeCount, 35);
+  assert.equal(result.items[32].data.homeTaskStatus, 1);
+  assert.equal(result.items[33].data.homeTaskStatus, 1);
   assert.match(workerSource, /const HOMEWORK_STATUS_REQUEST_CONCURRENCY = 10;/);
-  assert.match(workerSource, /const MAX_HOMEWORK_STATUS_REQUEST_BATCHES = 1;/);
-  assert.match(workerSource, /MAX_HOMEWORK_STATUS_THEMES_PER_CHECK = HOMEWORK_STATUS_REQUEST_CONCURRENCY \* MAX_HOMEWORK_STATUS_REQUEST_BATCHES/);
+});
+
+test("new HUMAN status-change events are included with older homework", () => {
+  const { context } = loadWorker();
+  const olderActive = Array.from({ length: 33 }, (_, index) => ({
+    id: `older-${index}`,
+    type: "home_task_created",
+    createdAt: `2026-10-01T10:${String(index).padStart(2, "0")}:00Z`,
+    data: { theme_id: index + 1, homeTaskId: index + 101, homeTaskStatus: 0 }
+  }));
+  const changes = [
+    { id: "returned-one", type: "home_task_rejected", createdAt: "2026-10-07T10:18:46Z", data: { theme_id: 101, homeTaskId: 201 } },
+    { id: "returned-two", type: "home_task_rejected", createdAt: "2026-10-07T10:18:58Z", data: { theme_id: 102, homeTaskId: 202 } },
+    { id: "approved", type: "home_task_approve", createdAt: "2026-10-07T10:19:08Z", data: { theme_id: 103, homeTaskId: 203 } }
+  ];
+  const selected = vm.runInContext(`selectHomeworkStatusTargets(${JSON.stringify([...olderActive, ...changes])})`, context);
+  const ids = JSON.parse(JSON.stringify(selected)).map((item) => item.id);
+  assert.deepEqual(ids.slice(-3), ["returned-one", "returned-two", "approved"]);
+  assert.equal(ids.length, 36);
+});
+
+test("rows without a live status are refreshed alongside already received homework", () => {
+  const { context } = loadWorker();
+  const received = Array.from({ length: 33 }, (_, index) => ({
+    id: `received-${index}`,
+    type: "home_task_created",
+    data: { theme_id: index + 1, homeTaskId: index + 101, homeTaskUserId: index + 1001, homeTaskStatus: 0 }
+  }));
+  const unknown = {
+    id: "missing-status",
+    type: "home_task_created",
+    data: { theme_id: 99, homeTaskId: 999, homeTaskUserId: 1999 }
+  };
+  const selected = vm.runInContext(`selectHomeworkStatusTargets(${JSON.stringify([...received, unknown])})`, context);
+  const ids = JSON.parse(JSON.stringify(selected)).map((item) => item.id);
+  assert.equal(ids.length, 34);
+  assert.ok(ids.includes("missing-status"));
+  assert.ok(ids.includes("received-32"));
 });
 
 test("the log gives its narrow new-count column to the diagnostic result", () => {

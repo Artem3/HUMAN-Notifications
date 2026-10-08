@@ -6,11 +6,9 @@ const REQUEST_TIMEOUT_MS = 30000;
 const MAX_CHECK_LOG = 100;
 const ASSESSMENT_DETAIL_LIMIT = 100;
 const HOMEWORK_STATUS_REQUEST_CONCURRENCY = 10;
-// All selected themes use one parallel request wave. Even with the 30-second
-// timeout, the theme phase stays below the five-minute minimum schedule with
-// room for the main notification request.
-const MAX_HOMEWORK_STATUS_REQUEST_BATCHES = 1;
-const MAX_HOMEWORK_STATUS_THEMES_PER_CHECK = HOMEWORK_STATUS_REQUEST_CONCURRENCY * MAX_HOMEWORK_STATUS_REQUEST_BATCHES;
+// Refresh every distinct student-task card returned by HUMAN. Requests still
+// run in groups of ten, so 45 current homework rows are five bounded waves,
+// not 45 simultaneous connections.
 const { HOME_TASK_STATUS_LABELS, isHomeworkNotification, isGradeNotification } = globalThis.HUMAN_SHARED;
 const MAX_NOTIFICATION_STORAGE_BYTES = 7 * 1024 * 1024;
 const MAX_ACTION_BADGE_COUNT = 99;
@@ -708,14 +706,17 @@ async function refreshHomeworkStatuses(items, institutionId) {
   const sourceItems = Array.isArray(items) ? items : [];
   const allTargets = sourceItems.filter((item) => isHomeworkNotification(item) && homeTaskId(item.data));
   const targets = selectHomeworkStatusTargets(allTargets);
-  const themeIds = [...new Set(targets.map((item) => themeId(item.data)).filter(Boolean))];
+  const homeTaskUserIds = [...new Set(targets.map((item) => homeTaskUserId(item.data)).filter(Boolean))];
+  const themeIds = [...new Set(targets.filter((item) => !homeTaskUserId(item.data)).map((item) => themeId(item.data)).filter(Boolean))];
   const selectedNotificationIds = new Set(targets.map((item) => String(item.id)));
   const diagnostics = {
     notificationCount: allTargets.length,
     selectedNotificationCount: targets.length,
     missingThemeIdCount: targets.length - targets.filter((item) => themeId(item.data)).length,
     themeCount: themeIds.length,
+    detailCount: homeTaskUserIds.length,
     themeHttpStatuses: {},
+    detailHttpStatuses: {},
     returnedTaskCount: 0,
     userStatusCount: 0,
     matchedNotificationCount: 0,
@@ -724,20 +725,33 @@ async function refreshHomeworkStatuses(items, institutionId) {
   };
   if (!institutionId) return { items: sourceItems, warningCount: 0, diagnostics };
 
-  // The lesson page expands home_tasks_users and selects the current student's
-  // relation by user_id. Its status is the live submission state.
+  // A notification gives us the exact student's home-task relation. Read that
+  // record first: it is the same status source that HUMAN renders on the task
+  // page and avoids inferring a student from a theme-wide task list.
   const statusByHomeTaskId = new Map();
   const statusByHomeTaskUserId = new Map();
   const failedThemeIds = new Set();
+  const failedHomeTaskUserIds = new Set();
   let warningCount = 0;
-  for (let index = 0; index < themeIds.length; index += HOMEWORK_STATUS_REQUEST_CONCURRENCY) {
-    const batch = themeIds.slice(index, index + HOMEWORK_STATUS_REQUEST_CONCURRENCY);
-    const results = await Promise.all(batch.map((id) => fetchThemeHomeworkStatuses(institutionId, id)));
+  const requests = [
+    ...homeTaskUserIds.map((id) => ({ type: "detail", id })),
+    ...themeIds.map((id) => ({ type: "theme", id }))
+  ];
+  for (let index = 0; index < requests.length; index += HOMEWORK_STATUS_REQUEST_CONCURRENCY) {
+    const batch = requests.slice(index, index + HOMEWORK_STATUS_REQUEST_CONCURRENCY);
+    const results = await Promise.all(batch.map((request) => request.type === "detail"
+      ? fetchStudentHomeTaskStatus(institutionId, request.id)
+      : fetchThemeHomeworkStatuses(institutionId, request.id)));
     results.forEach((result, resultIndex) => {
       if (result.warning) warningCount += 1;
-      if (!result.ok) failedThemeIds.add(batch[resultIndex]);
+      const request = batch[resultIndex];
+      if (!result.ok) {
+        if (request.type === "detail") failedHomeTaskUserIds.add(request.id);
+        else failedThemeIds.add(request.id);
+      }
       const statusKey = String(result.httpStatus || 0);
-      diagnostics.themeHttpStatuses[statusKey] = (diagnostics.themeHttpStatuses[statusKey] || 0) + 1;
+      const httpStatuses = request.type === "detail" ? diagnostics.detailHttpStatuses : diagnostics.themeHttpStatuses;
+      httpStatuses[statusKey] = (httpStatuses[statusKey] || 0) + 1;
       diagnostics.returnedTaskCount += result.returnedTaskCount;
       diagnostics.userStatusCount += result.userStatusCount;
       Object.entries(result.statusValueCounts).forEach(([status, count]) => {
@@ -751,10 +765,10 @@ async function refreshHomeworkStatuses(items, institutionId) {
   const updatedItems = sourceItems.map((item) => {
     if (!isHomeworkNotification(item)) return item;
     if (!selectedNotificationIds.has(String(item.id))) return item;
-    if (failedThemeIds.has(themeId(item.data))) return item;
     const taskId = homeTaskId(item.data);
-    const status = statusByHomeTaskUserId.get(homeTaskUserId(item.data))
-      ?? statusByHomeTaskId.get(taskId);
+    const userId = homeTaskUserId(item.data);
+    if (userId ? failedHomeTaskUserIds.has(userId) : failedThemeIds.has(themeId(item.data))) return item;
+    const status = userId ? statusByHomeTaskUserId.get(userId) : statusByHomeTaskId.get(taskId);
     if (status === undefined) {
       if (!Object.hasOwn(item.data || {}, "homeTaskStatus")) return item;
       const data = { ...item.data };
@@ -777,20 +791,20 @@ async function refreshHomeworkStatuses(items, institutionId) {
 
 function selectHomeworkStatusTargets(items) {
   const candidates = Array.isArray(items) ? items : [];
-  const selectedThemeIds = new Set();
-  const activeFirst = [...candidates].sort((left, right) => homeworkStatusPriority(left) - homeworkStatusPriority(right));
-  for (const item of activeFirst) {
-    const id = themeId(item.data);
-    if (!id || selectedThemeIds.has(id)) continue;
-    selectedThemeIds.add(id);
-    if (selectedThemeIds.size === MAX_HOMEWORK_STATUS_THEMES_PER_CHECK) break;
+  const selectedTargetKeys = new Set();
+  for (const item of candidates) {
+    const key = homeworkStatusTargetKey(item);
+    if (!key || selectedTargetKeys.has(key)) continue;
+    selectedTargetKeys.add(key);
   }
-  return candidates.filter((item) => selectedThemeIds.has(themeId(item.data)));
+  return candidates.filter((item) => selectedTargetKeys.has(homeworkStatusTargetKey(item)));
 }
 
-function homeworkStatusPriority(item) {
-  const status = normalizeHomeTaskStatus(item?.data?.homeTaskStatus);
-  return status === 2 || status === 3 ? 1 : 0;
+function homeworkStatusTargetKey(item) {
+  const userId = homeTaskUserId(item?.data);
+  if (userId) return `user:${userId}`;
+  const id = themeId(item?.data);
+  return id ? `theme:${id}` : "";
 }
 
 async function fetchThemeHomeworkStatuses(institutionId, value) {
@@ -800,6 +814,28 @@ async function fetchThemeHomeworkStatuses(institutionId, value) {
     const theme = await response.json();
     if (!Array.isArray(theme?.home_tasks)) return emptyHomeworkStatusResult(true, response.status);
     return mapHomeworkTaskStatuses(theme.home_tasks, response.status, institutionId);
+  } catch {
+    return emptyHomeworkStatusResult(true, 0);
+  }
+}
+
+async function fetchStudentHomeTaskStatus(institutionId, value) {
+  try {
+    const response = await fetchWithTimeout(`${API_ORIGIN}/${encodeURIComponent(institutionId)}/home-task/home-tasks-users/${encodeURIComponent(value)}`, { credentials: "include" });
+    if (!response.ok) return emptyHomeworkStatusResult(true, response.status);
+    const task = await response.json();
+    const status = normalizeHomeTaskStatus(task?.status ?? task?.home_tasks_user?.status);
+    if (status === null) return emptyHomeworkStatusResult(true, response.status);
+    return {
+      statusByHomeTaskId: new Map(),
+      statusByHomeTaskUserId: new Map([[String(value), status]]),
+      ok: true,
+      warning: false,
+      httpStatus: response.status,
+      returnedTaskCount: 1,
+      userStatusCount: 1,
+      statusValueCounts: { [String(status)]: 1 }
+    };
   } catch {
     return emptyHomeworkStatusResult(true, 0);
   }
@@ -855,8 +891,9 @@ function normalizeHomeTaskStatus(value) {
 
 function formatHomeworkStatusDiagnostics(diagnostics = {}) {
   const themeHttp = Object.entries(diagnostics.themeHttpStatuses || {}).map(([status, count]) => `${status}×${count}`).join(", ") || "кеш";
+  const detailHttp = Object.entries(diagnostics.detailHttpStatuses || {}).map(([status, count]) => `${status}×${count}`).join(", ") || "кеш";
   const values = Object.entries(diagnostics.statusValueCounts || {}).map(([status, count]) => `${status}×${count}`).join(", ") || "—";
-  return `Статуси ДЗ: сповіщень з ID: ${Number(diagnostics.notificationCount) || 0}; обрано: ${Number(diagnostics.selectedNotificationCount) || 0}; тем: ${Number(diagnostics.themeCount) || 0}; тема HTTP: ${themeHttp}; завдань: ${Number(diagnostics.returnedTaskCount) || 0}; робіт учня: ${Number(diagnostics.userStatusCount) || 0}; значення: ${values}; збігів: ${Number(diagnostics.matchedNotificationCount) || 0}; оновлено рядків: ${Number(diagnostics.updatedNotificationCount) || 0}.`;
+  return `Статуси ДЗ: сповіщень з ID: ${Number(diagnostics.notificationCount) || 0}; обрано: ${Number(diagnostics.selectedNotificationCount) || 0}; тем: ${Number(diagnostics.themeCount) || 0}; тема HTTP: ${themeHttp}; карток учня: ${Number(diagnostics.detailCount) || 0}; картка HTTP: ${detailHttp}; завдань: ${Number(diagnostics.returnedTaskCount) || 0}; робіт учня: ${Number(diagnostics.userStatusCount) || 0}; значення: ${values}; збігів: ${Number(diagnostics.matchedNotificationCount) || 0}; оновлено рядків: ${Number(diagnostics.updatedNotificationCount) || 0}.`;
 }
 
 function extractSubject(theme) {
